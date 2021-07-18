@@ -27,6 +27,6 @@ log_watcher_umbrella-*.tar
 
 *-log.jsonl
 *-log.jsonx
-*-args.json
+*-arg.json
 *-start.json
 *-result.json

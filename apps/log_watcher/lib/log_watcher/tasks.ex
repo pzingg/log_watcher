@@ -5,7 +5,7 @@ defmodule LogWatcher.Tasks do
   import Ecto.Query
 
   alias LogWatcher.Repo
-  alias LogWatcher.Tasks.Task
+  alias LogWatcher.Tasks.{Session, Task}
 
   ## PubSub utilities
   def session_topic(session_id) do
@@ -39,8 +39,16 @@ defmodule LogWatcher.Tasks do
     |> Repo.one()
   end
 
+  ## Sessions on disk
+  def create_session(session_id, session_log_path) do
+    Session.changeset(%Session{}, %{
+      "session_id" => session_id,
+      "session_log_path" => session_log_path})
+    |> Ecto.Changeset.apply_changes()
+  end
+
   ## Task files on disk
-  def list_tasks(session_id, session_log_path, include_archived \\ false) do
+  def list_tasks(%Session{session_id: session_id, session_log_path: session_log_path}, include_archived \\ false) do
     glob =
       if include_archived do
         Path.join(session_log_path, "*-log.json?")
@@ -48,7 +56,33 @@ defmodule LogWatcher.Tasks do
         Path.join(session_log_path, "*-log.jsonl")
       end
 
-    Path.wildcard(glob)
-    |> Enum.map(&Task.create_from_file(session_id, &1))
+    glob
+    |> Path.wildcard()
+    |> Enum.map(&Task.create_from_file!(session_id, &1))
+  end
+
+  def get_task(%Session{session_id: session_id, session_log_path: session_log_path}, task_id) do
+    case Task.log_files(session_log_path, task_id) do
+      [] ->
+        nil
+      [file | _] ->
+        Task.create_from_file!(session_id, file)
+    end
+  end
+
+  def archive_task(%Session{session_log_path: session_log_path}, task_id) do
+    log_files = Task.log_files(session_log_path, task_id)
+    if Enum.empty?(log_files) do
+      [{task_id, {:error, :not_found}}]
+    else
+      Enum.map(log_files, fn path ->
+        file = Path.basename(path)
+        if String.ends_with?(file, "jsonx") do
+          {file, {:error, :already_archived}}
+        else
+          archived_path = String.replace_trailing(path, "jsonl", "jsonx")
+          {file, File.rename(path, archived_path)}
+        end end)
+    end
   end
 end
