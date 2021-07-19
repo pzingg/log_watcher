@@ -1,13 +1,17 @@
 defmodule LogWatcherUmbrella.MixProject do
   use Mix.Project
 
+  # Umbrella projects require :apps_path and :apps
   def project do
     [
       app: :log_watcher_umbrella,
+      apps_path: "apps",
+      apps: [:log_watcher],
       version: "0.1.0",
       elixir: "~> 1.11",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      releases: []
     ]
   end
 
@@ -19,6 +23,7 @@ defmodule LogWatcherUmbrella.MixProject do
   end
 
   # Run "mix help deps" to learn about dependencies.
+  # Umbrella projects will include each app's dependencies
   defp deps do
     [
       # {:dep_from_hexpm, "~> 0.3.0"},

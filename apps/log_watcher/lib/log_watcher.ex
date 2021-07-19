@@ -7,6 +7,7 @@ defmodule LogWatcher do
   if it comes from the database, an external API or others.
   """
 
+  @spec error_messages(Ecto.Changeset.t()) :: [String.t()]
   def error_messages(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
       Enum.reduce(opts, msg, fn {key, value}, acc ->

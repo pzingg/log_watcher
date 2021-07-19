@@ -71,7 +71,7 @@ defmodule LogWatcher.FileWatcher do
   @doc """
   Public interface. Add a file to the watch list.
   """
-  @spec add_watch(String.t(), String.t()) :: :ok
+  @spec add_watch(String.t(), String.t()) :: {:ok, String.t()}
   def add_watch(session_id, file_name) do
     GenServer.call(via_tuple(session_id), {:add_watch, file_name})
   end
@@ -79,7 +79,7 @@ defmodule LogWatcher.FileWatcher do
   @doc """
   Public interface. Remove a file from the watch list.
   """
-  @spec remove_watch(String.t(), String.t()) :: :ok
+  @spec remove_watch(String.t(), String.t()) :: {:ok, String.t()}
   def remove_watch(session_id, file_name) do
     GenServer.call(via_tuple(session_id), {:remove_watch, file_name})
   end
@@ -112,7 +112,7 @@ defmodule LogWatcher.FileWatcher do
   Init callback. Returns the initial state, but continues with a :check message.
   """
   @impl true
-  @spec init(term()) :: {:ok, state(), {:continue, :check}}
+  @spec init(term()) :: {:ok, state()}
   def init([session_id, session_log_path]) do
     args = [dirs: [session_log_path], recursive: false]
     Logger.info("FileSystem starting with #{inspect(args)}")
@@ -202,6 +202,7 @@ defmodule LogWatcher.FileWatcher do
     {:stop, :normal, state}
   end
 
+  @spec check_all_files(state()) :: map()
   defp check_all_files(%__MODULE__{session_id: session_id, files: files}) do
     Enum.map(files, fn {file_name, file} ->
       {_lines, next_file} = check_for_lines(session_id, file)
@@ -239,6 +240,7 @@ defmodule LogWatcher.FileWatcher do
     end
   end
 
+  @spec handle_lines(String.t(), boolean(), String.t(), [String.t()]) :: boolean()
   defp handle_lines(_session_id, start_sent, _file_name, []), do: start_sent
   defp handle_lines(session_id, start_sent, file_name, lines) do
     Logger.info("file #{file_name} got #{Enum.count(lines)} lines")
@@ -258,6 +260,7 @@ defmodule LogWatcher.FileWatcher do
     end)
   end
 
+  @spec handle_close(String.t(), String.t()) :: :ok
   defp handle_close(session_id, file_name) do
     Logger.info("file #{file_name} closed")
     Tasks.session_topic(session_id)

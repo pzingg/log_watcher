@@ -9,8 +9,13 @@ defmodule LogWatcher.MixProject do
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
       lockfile: "../../mix.lock",
-      elixir: "~> 1.7",
+      elixir: "~> 1.11",
       elixirc_paths: elixirc_paths(Mix.env()),
+      dialyzer: [
+        plt_add_deps: :apps_direct,
+        plt_add_apps: [:oban],
+        ignore_warnings: "dialyzer.ignore-warnings"
+      ],
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps()
@@ -36,6 +41,7 @@ defmodule LogWatcher.MixProject do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
+      {:dialyxir, "~> 1.1", only: [:dev], runtime: false},
       {:dotenvy, "~> 0.3"},
       {:ecto_sql, "~> 3.6"},
       {:file_system, "~> 0.2"},

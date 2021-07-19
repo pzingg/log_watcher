@@ -10,6 +10,7 @@ defmodule LogWatcher.TaskStarter do
   # %{id: 100, task_type: "update", gen: 2} |> LogWatcher.LogWatcherWorker.new() |> Oban.insert()
 
   @impl Oban.Worker
+  @spec perform(Oban.Job.t()) :: {:ok, term()} | {:discard, term()}
   def perform(%Oban.Job{id: id, args: %{"task_id" => task_id, "task_type" => task_type, "gen" => gen}}) do
     Logger.info("job #{id} task_id #{task_id} perform")
     session_log_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "output"])
@@ -18,9 +19,10 @@ defmodule LogWatcher.TaskStarter do
 
   def perform(%Oban.Job{id: id, args: args}) do
     Logger.error("job #{id} some args are missing: #{inspect(args)}")
-    {:error, "Not a task job"}
+    {:discard, "Not a task job"}
   end
 
+  @spec watch_and_run(String.t(), String.t(), String.t(), String.t(), integer()) :: {:ok, term()} | {:discard, term()}
   def watch_and_run(session_id, session_log_path, task_id, task_type, gen) do
     log_file = Task.log_file_name(task_id, task_type, gen)
     Logger.info("job #{task_id}: pid is #{inspect(self())}, start watching #{log_file}")

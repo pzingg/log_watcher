@@ -11,8 +11,8 @@ defmodule LogWatcher.Tasks.Session do
   end
 
   @type t :: %__MODULE__{
-    session_id: String.t(),
-    session_log_path: String.t(),
+    session_id: String.t() | nil,
+    session_log_path: String.t() | nil,
   }
 
   @create_fields [
@@ -20,6 +20,7 @@ defmodule LogWatcher.Tasks.Session do
     :session_log_path,
   ]
 
+  @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(session, params \\ %{}) do
     session
     |> Ecto.Changeset.cast(params, @create_fields)
