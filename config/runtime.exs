@@ -11,19 +11,19 @@ IO.puts("for target '#{config_target()}' in '#{config_env()}' environment")
 # For environment settings, read e.g ".env", "dev.env", "dev.local.env"
 # Search in current directory (if running under Mix in project root or under a release),
 # or two directories up (if running under Mix in umbrella app directory).
-{default_name, default_log_dir, env_paths} =
+current_dir_env_paths = ["./.env", "./#{config_env()}.env", "./#{config_env()}.local.env"]
+
+umbrella_env_paths =
   if parent_dir == "apps" do
-    {Path.basename(current_dir),
-      Path.dirname(current_dir) |> Path.dirname(),
-      ["./.env", "./#{config_env()}.env", "./#{config_env()}.local.env",
-        "../../.env", "../../#{config_env()}.env", "../../#{config_env()}.local.env"]}
+    current_dir_env_paths ++
+      Enum.map(current_dir_env_paths, fn path ->
+        String.replace_leading(path, "./", "../../")
+      end)
   else
-    {"rservex",
-      current_dir,
-      ["./.env", "./#{config_env()}.env", "./#{config_env()}.local.env"]}
+    current_dir_env_paths
   end
 
-source!(env_paths)
+source!(umbrella_env_paths)
 
 config :log_watcher, Oban,
   repo: LogWatcher.Repo,

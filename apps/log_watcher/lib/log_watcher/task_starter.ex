@@ -11,7 +11,10 @@ defmodule LogWatcher.TaskStarter do
 
   @impl Oban.Worker
   @spec perform(Oban.Job.t()) :: {:ok, term()} | {:discard, term()}
-  def perform(%Oban.Job{id: id, args: %{"task_id" => task_id, "task_type" => task_type, "gen" => gen}}) do
+  def perform(%Oban.Job{
+        id: id,
+        args: %{"task_id" => task_id, "task_type" => task_type, "gen" => gen}
+      }) do
     Logger.info("job #{id} task_id #{task_id} perform")
     session_log_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "output"])
     watch_and_run("S1", session_log_path, task_id, task_type, gen)
@@ -22,7 +25,8 @@ defmodule LogWatcher.TaskStarter do
     {:discard, "Not a task job"}
   end
 
-  @spec watch_and_run(String.t(), String.t(), String.t(), String.t(), integer()) :: {:ok, term()} | {:discard, term()}
+  @spec watch_and_run(String.t(), String.t(), String.t(), String.t(), integer()) ::
+          {:ok, term()} | {:discard, term()}
   def watch_and_run(session_id, session_log_path, task_id, task_type, gen) do
     log_file = Task.log_file_name(task_id, task_type, gen)
     Logger.info("job #{task_id}: pid is #{inspect(self())}, start watching #{log_file}")
@@ -34,11 +38,14 @@ defmodule LogWatcher.TaskStarter do
       case LogWatcher.FileWatcher.start_link(session_id, session_log_path) do
         {:ok, pid} ->
           pid
+
         {:error, {:already_started, pid}} ->
           pid
+
         _other ->
           :ignore
       end
+
     {:ok, _file} = LogWatcher.FileWatcher.add_watch(session_id, log_file)
 
     length = 15
@@ -47,17 +54,32 @@ defmodule LogWatcher.TaskStarter do
     log_path = Path.join(session_log_path, log_file)
     Logger.info("job #{task_id}: shelling out to #{task_script}")
 
-    _pid = spawn(fn ->
-      {output, exit_status} = System.cmd("python3", [task_script,
-        "--log-path", log_path,
-        "--session-id", session_id,
-        "--task-id", task_id,
-        "--task-type", task_type,
-        "--gen", to_string(gen),
-        "--length", to_string(length)], cd: cmd_dir)
-      Logger.info("job #{task_id}: script exited with #{exit_status}")
-      Logger.info("job #{task_id}: output from script: #{inspect(output)}")
-    end)
+    _pid =
+      spawn(fn ->
+        {output, exit_status} =
+          System.cmd(
+            "python3",
+            [
+              task_script,
+              "--log-path",
+              log_path,
+              "--session-id",
+              session_id,
+              "--task-id",
+              task_id,
+              "--task-type",
+              task_type,
+              "--gen",
+              to_string(gen),
+              "--length",
+              to_string(length)
+            ],
+            cd: cmd_dir
+          )
+
+        Logger.info("job #{task_id}: script exited with #{exit_status}")
+        Logger.info("job #{task_id}: output from script: #{inspect(output)}")
+      end)
 
     result = loop(task_id)
     Logger.info("job #{task_id}: result is #{inspect(result)}")
@@ -76,7 +98,9 @@ defmodule LogWatcher.TaskStarter do
       {:ok, task_info} ->
         Tasks.session_topic(session_id)
         |> Tasks.broadcast({:task_started, task_info})
+
         {:ok, task_info}
+
       {:error, reason} ->
         {:discard, reason}
     end
@@ -84,18 +108,22 @@ defmodule LogWatcher.TaskStarter do
 
   def loop(task_id) do
     Logger.info("job #{task_id}: re-entering loop")
+
     receive do
       {:task_started, file_name, info} ->
         Logger.info("job #{task_id}, loop received :task_started on #{file_name}")
         Logger.info("job #{task_id}, loop returning :ok #{inspect(info)}")
         {:ok, info}
+
       {:task_updated, file_name, _info} ->
         Logger.info("job #{task_id}, loop received :task_updated on #{file_name}")
         loop(task_id)
+
       {:task_file_closed, file_name} ->
         Logger.error("job #{task_id}, loop received :task_file_closed on #{file_name}")
         Logger.info("job #{task_id}, loop returning :error")
         {:error, :unexpected_close}
+
       other ->
         Logger.info("job #{task_id}, loop received #{inspect(other)}")
         loop(task_id)
