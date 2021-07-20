@@ -31,6 +31,7 @@ defmodule LogWatcher.DataCase do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(LogWatcher.Repo)
 
     unless tags[:async] do
+      IO.inspect("setting shared mode for LogWatcher.Repo")
       Ecto.Adapters.SQL.Sandbox.mode(LogWatcher.Repo, {:shared, self()})
     end
 

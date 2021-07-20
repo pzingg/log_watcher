@@ -3,21 +3,30 @@ defmodule LogWatcher.TaskStarter do
 
   require Logger
 
-  alias LogWatcher.Tasks
-  alias LogWatcher.Tasks.Task
+  alias LogWatcher.{FileWatcher, Tasks}
+  alias LogWatcher.Tasks.{Session, Task}
 
   # To start a job
-  # %{id: 100, task_type: "update", gen: 2} |> LogWatcher.LogWatcherWorker.new() |> Oban.insert()
+  # %{id: 100, session_id: "S2", session_log_path: "path_to_output",
+  #    task_id: task_id, task_type: "update", gen: 2}
+  #    |> LogWatcher.TaskStarter.new()
+  #    |> Oban.insert()
 
   @impl Oban.Worker
   @spec perform(Oban.Job.t()) :: {:ok, term()} | {:discard, term()}
   def perform(%Oban.Job{
         id: id,
-        args: %{"task_id" => task_id, "task_type" => task_type, "gen" => gen}
+        args: %{
+          "session_id" => session_id,
+          "session_log_path" => session_log_path,
+          "task_id" => task_id,
+          "task_type" => task_type,
+          "gen" => gen_str
+        }
       }) do
     Logger.info("job #{id} task_id #{task_id} perform")
-    session_log_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "output"])
-    watch_and_run("S1", session_log_path, task_id, task_type, gen)
+    gen = String.to_integer(gen_str)
+    watch_and_run(session_id, session_log_path, task_id, task_type, gen)
   end
 
   def perform(%Oban.Job{id: id, args: args}) do
@@ -25,63 +34,64 @@ defmodule LogWatcher.TaskStarter do
     {:discard, "Not a task job"}
   end
 
+  @spec watch_and_run(Session.t(), String.t(), String.t(), integer()) ::
+          {:ok, term()} | {:discard, term()}
+  def watch_and_run(
+        %Session{session_id: session_id, session_log_path: session_log_path},
+        task_id,
+        task_type,
+        gen
+      ) do
+    watch_and_run(session_id, session_log_path, task_id, task_type, gen)
+  end
+
   @spec watch_and_run(String.t(), String.t(), String.t(), String.t(), integer()) ::
           {:ok, term()} | {:discard, term()}
   def watch_and_run(session_id, session_log_path, task_id, task_type, gen) do
     log_file = Task.log_file_name(task_id, task_type, gen)
-    Logger.info("job #{task_id}: pid is #{inspect(self())}, start watching #{log_file}")
 
-    Tasks.session_topic(session_id)
-    |> Tasks.subscribe()
+    # Set up to receive messages
+    Logger.info(
+      "job #{task_id}: pid is #{inspect(self())}, start watching #{log_file} in #{
+        session_log_path
+      }"
+    )
 
-    _watcher_pid =
-      case LogWatcher.FileWatcher.start_link(session_id, session_log_path) do
-        {:ok, pid} ->
-          pid
+    link_result = FileWatcher.start_link_and_watch_file(session_id, session_log_path, log_file)
 
-        {:error, {:already_started, pid}} ->
-          pid
+    Logger.info("job #{task_id}: watcher is #{inspect(link_result)}")
 
-        _other ->
-          :ignore
-      end
+    # Write arg file
+    arg_path = Path.join(session_log_path, Task.arg_file_name(task_id, task_type, gen))
 
-    {:ok, _file} = LogWatcher.FileWatcher.add_watch(session_id, log_file)
+    task_arg = %{
+      session_id: session_id,
+      session_log_path: session_log_path,
+      task_id: task_id,
+      task_type: task_type,
+      gen: gen,
+      length: 5 + :rand.uniform(6),
+      space_type: "mixture"
+    }
 
-    length = 15
-    cmd_dir = Path.join(:code.priv_dir(:log_watcher), "mock_task")
-    task_script = Path.join(cmd_dir, "mock_task.py")
-    log_path = Path.join(session_log_path, log_file)
-    Logger.info("job #{task_id}: shelling out to #{task_script}")
+    Logger.info("job #{task_id}: write arg file to #{arg_path}")
+    :ok = Tasks.write_arg_file(arg_path, task_arg)
 
-    _pid =
-      spawn(fn ->
-        {output, exit_status} =
-          System.cmd(
-            "python3",
-            [
-              task_script,
-              "--log-path",
-              log_path,
-              "--session-id",
-              session_id,
-              "--task-id",
-              task_id,
-              "--task-type",
-              task_type,
-              "--gen",
-              to_string(gen),
-              "--length",
-              to_string(length)
-            ],
-            cd: cmd_dir
-          )
+    # Start mock task script
+    script_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "mock_task.py"])
 
-        Logger.info("job #{task_id}: script exited with #{exit_status}")
-        Logger.info("job #{task_id}: output from script: #{inspect(output)}")
+    Logger.info("job #{task_id}: run mock script at #{script_path}")
+
+    script_task =
+      Elixir.Task.Supervisor.async_nolink(LogWatcher.TaskSupervisor, fn ->
+        run_mock(script_path, session_log_path, session_id, task_id, task_type, gen)
       end)
 
+    # Process incoming messages to find a result
+    Logger.info("job #{task_id}: process messages until :task_started is received")
     result = loop(task_id)
+
+    # Return disposition for Oban
     Logger.info("job #{task_id}: result is #{inspect(result)}")
 
     # Oban.Worker.perform return values:
@@ -95,21 +105,82 @@ defmodule LogWatcher.TaskStarter do
     # {:snooze, seconds} — mark the job as snoozed and schedule it to run
     #    again seconds in the future.
     case result do
-      {:ok, task_info} ->
-        Tasks.session_topic(session_id)
-        |> Tasks.broadcast({:task_started, task_info})
-
-        {:ok, task_info}
+      {:ok, task_info} when is_map(task_info) ->
+        {:ok, Map.put(task_info, :script_task, script_task)}
 
       {:error, reason} ->
         {:discard, reason}
     end
   end
 
+  @spec yield_or_shutdown_task(Elixir.Task.t(), integer()) :: {:ok, term()} | {:error, :timeout}
+  def yield_or_shutdown_task(task, timeout) do
+    Logger.info("#{inspect(self())} yielding to script task...")
+    case Elixir.Task.yield(task, timeout) || Elixir.Task.shutdown(task) do
+      {:ok, result} ->
+        Logger.info("after yield, script task returned #{inspect(result)}")
+        {:ok, result}
+
+      nil ->
+        Logger.warn("after yield, failed to get a result from script task in #{timeout}ms")
+        {:error, :timeout}
+    end
+  end
+
+  @spec run_mock(String.t(), String.t(), String.t(), String.t(), String.t(), integer()) ::
+          :ok | {:error, integer()}
+  def run_mock(script_path, session_log_path, session_id, task_id, task_type, gen) do
+    executable =
+      if String.ends_with?(script_path, ".R") do
+        "Rscript"
+      else
+        "python3"
+      end
+
+    Logger.info("job #{task_id}: shelling out to #{executable}")
+
+    {output, exit_status} =
+      System.cmd(
+        executable,
+        [
+          script_path,
+          "--log-path",
+          session_log_path,
+          "--session-id",
+          session_id,
+          "--task-id",
+          task_id,
+          "--task-type",
+          task_type,
+          "--gen",
+          to_string(gen)
+        ],
+        cd: Path.dirname(script_path)
+      )
+
+    Logger.info("job #{task_id}: script exited with #{exit_status}")
+    Logger.info("job #{task_id}: output from script: #{inspect(output)}")
+
+    if exit_status == 0 do
+      :ok
+    else
+      Tasks.session_topic(session_id)
+      |> Tasks.broadcast({:script_error, exit_status, output})
+
+      {:error, exit_status}
+    end
+  end
+
+  @spec loop(String.t()) :: {:ok, map()} | {:error, :script_error | :unexpected_close | :timeout}
   def loop(task_id) do
     Logger.info("job #{task_id}: re-entering loop")
 
     receive do
+      {:script_error, _exit_status, output} ->
+        Logger.error("job #{task_id}, loop received :script_error, output was #{output}")
+        Logger.info("job #{task_id}, loop returning :error")
+        {:error, :script_error}
+
       {:task_started, file_name, info} ->
         Logger.info("job #{task_id}, loop received :task_started on #{file_name}")
         Logger.info("job #{task_id}, loop returning :ok #{inspect(info)}")

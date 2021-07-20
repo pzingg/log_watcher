@@ -13,22 +13,32 @@ defmodule LogWatcher.FileWatcher do
     @enforce_keys [:stream]
 
     defstruct stream: nil,
-              start_sent: false,
               position: 0,
               size: 0,
-              last_modified: 0
+              last_modified: 0,
+              start_sent: false
 
     @type t :: %__MODULE__{
             stream: File.Stream.t(),
-            start_sent: boolean(),
             position: integer(),
             size: integer(),
-            last_modified: integer()
+            last_modified: integer(),
+            start_sent: boolean()
           }
 
     def new(dir, file_name) do
       path = Path.join(dir, file_name)
       %__MODULE__{stream: File.stream!(path)}
+    end
+  end
+
+  defimpl String.Chars, for: LogWatcher.FileWatcher.WatchedFile do
+    def to_string(
+          %WatchedFile{stream: stream, position: position, start_sent: start_sent} = watched
+        ) do
+      "%LogWatcher.FileWatcher.WatchedFile{stream: #{stream.path}, position: #{position}, start_sent: #{
+        start_sent
+      }}"
     end
   end
 
@@ -49,10 +59,38 @@ defmodule LogWatcher.FileWatcher do
   @type gproc_key :: {:n, :l, {:session_id, String.t()}}
 
   @doc """
+  Public interface. Subscribe to task messages, start the GenServer for a session,
+  and watch a log file.
+  """
+  @spec start_link_and_watch_file(String.t(), String.t(), String.t()) :: :ok
+  def start_link_and_watch_file(session_id, session_log_path, log_file) do
+    with :ok <- Tasks.session_topic(session_id) |> Tasks.subscribe(),
+         {:ok, _watcher_pid} <- start_or_find_link(session_id, session_log_path),
+         {:ok, _file} <- add_watch(session_id, log_file) do
+      :ok
+    end
+  end
+
+  @spec start_or_find_link(String.t(), String.t()) :: GenServer.on_start()
+  defp start_or_find_link(session_id, session_log_path) do
+    case start_link(session_id, session_log_path) do
+      {:ok, pid} ->
+        {:ok, pid}
+
+      {:error, {:already_started, pid}} ->
+        {:ok, pid}
+
+      other ->
+        other
+    end
+  end
+
+  @doc """
   Public interface. Start the GenServer for a session.
   """
   @spec start_link(String.t(), String.t()) :: GenServer.on_start()
   def start_link(session_id, session_log_path) do
+    Logger.info("start_link #{session_id} #{session_log_path}")
     GenServer.start_link(__MODULE__, [session_id, session_log_path], name: via_tuple(session_id))
   end
 
@@ -69,6 +107,7 @@ defmodule LogWatcher.FileWatcher do
   """
   @spec add_watch(String.t(), String.t()) :: {:ok, String.t()}
   def add_watch(session_id, file_name) do
+    Logger.info("add_watch #{session_id} #{file_name}")
     GenServer.call(via_tuple(session_id), {:add_watch, file_name})
   end
 
@@ -110,8 +149,10 @@ defmodule LogWatcher.FileWatcher do
   @impl true
   @spec init(term()) :: {:ok, state()}
   def init([session_id, session_log_path]) do
+    Logger.info("init #{session_id} #{session_log_path}")
+
     args = [dirs: [session_log_path], recursive: false]
-    Logger.info("FileSystem starting with #{inspect(args)}")
+    Logger.info("start FileSystem link with #{inspect(args)}")
 
     {:ok, watcher_pid} = FileSystem.start_link(args)
     FileSystem.subscribe(watcher_pid)
@@ -155,7 +196,7 @@ defmodule LogWatcher.FileWatcher do
       ) do
     file = WatchedFile.new(session_log_path, file_name)
     {_lines, next_file} = check_for_lines(session_id, file)
-    Logger.info("watch added for #{inspect(next_file)}")
+    Logger.info("watch added for #{next_file}")
     next_state = %__MODULE__{state | files: Map.put_new(files, file_name, next_file)}
     {:reply, {:ok, file_name}, next_state}
   end
@@ -283,12 +324,12 @@ defmodule LogWatcher.FileWatcher do
   defp handle_lines(_session_id, start_sent, _file_name, []), do: start_sent
 
   defp handle_lines(session_id, start_sent, file_name, lines) do
-    Logger.info("file #{file_name} got #{Enum.count(lines)} lines")
+    Logger.info("file #{file_name} start_sent #{start_sent} got #{Enum.count(lines)} lines")
 
+    topic = Tasks.session_topic(session_id)
     Enum.reduce(lines, start_sent, fn line, acc ->
-      Logger.info(line)
       info = Jason.decode!(line, keys: :atoms)
-      topic = Tasks.session_topic(session_id)
+      Logger.info("acc #{acc} status #{info[:status]}")
 
       next_acc =
         if !acc && info[:status] == "running" do

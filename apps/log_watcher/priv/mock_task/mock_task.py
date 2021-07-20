@@ -15,7 +15,26 @@ import time
 def format_utcnow():
   return datetime.datetime.utcnow().isoformat(timespec='milliseconds')
 
-def mock_status(line_no, length, error, cancel):
+def read_args(info, arg_path):
+  with open(arg_path, 'rt') as f:
+    args = json.load(f)
+    assert info['session_id'] == args['session_id']
+    assert info['task_id'] == args['task_id']
+    assert info['task_type'] == args['task_type']
+    assert info['gen'] == args['gen']
+
+    for key in ['session_id', 'session_log_path', 'task_id', 'task_type', 'gen']:
+        if key in args:
+            del args[key]
+
+    task_id = info['task_id']
+    info['time'] = format_utcnow()
+    info['status'] = 'input'
+    info['message'] = f'Task {task_id} parsed {len(args.keys())} args'
+
+    return (info, args)
+
+def mock_status(info, line_no, length, error, cancel):
   progress_counter = None
   progress_total = None
   result = None
@@ -38,7 +57,18 @@ def mock_status(line_no, length, error, cancel):
         errors = [{'message': f'error on line {line_no}', 'key': 'task_id'}]
       else:
         result = {'params': [['a', 2], ['b', line_no]]}
-  return (status, progress_counter, progress_total, result, errors)
+
+  task_id = info['task_id']
+  info['time'] = format_utcnow()
+  info['status'] = status
+  info['message'] = f'Task {task_id} {status} on line {line_no}'
+
+  if progress_counter is not None and progress_total is not None:
+    info['progress_counter'] = progress_counter
+    info['progress_total'] = progress_total
+    info['progress_phase'] = 'Compiling answers'
+
+  return (info, result, errors)
 
 def make_log_prefix(task_id, task_type, gen):
   gen_str = str(gen).zfill(4)
@@ -58,13 +88,6 @@ def result_file_name(task_id, task_type, gen):
 
 # No 'os_pid' in arg file
 ARG_KEYS = ['time', 'session_id', 'task_id', 'task_type', 'gen']
-
-def write_arg_file(path, info):
-  with open(path, 'wt') as f:
-    arg_info = {k: v for k, v in info.items() if k in ARG_KEYS}
-    arg_info.update({'arg': {'space_type': 'mixture'}})
-    json.dump(arg_info, f, indent=2)
-    f.write('\n')
 
 def write_start_file(path, info):
   with open(path, 'wt') as f:
@@ -88,50 +111,52 @@ def run_job(args):
   task_id = args['task_id']
   task_type = args['task_type']
   gen = args['gen']
-  length = args['length']
   error = args['error']
   cancel = args['cancel']
 
-  log_file_path = os.path.join(session_log_path, log_file_name(task_id, task_type, gen))
-  print(f'running mock_task, writing {length} lines to {log_file_path}')
-
-  with open(log_file_path, 'wt') as f:
+  log_file = log_file_name(task_id, task_type, gen)
+  with open(os.path.join(session_log_path, log_file), 'wt') as f:
     os_pid = os.getpid()
     started_at = None
     running_at = None
     write_start = False
     write_result = False
-    result_file = result_file_name(task_id, task_type, gen)
+
+
+    info = {
+      'time': format_utcnow(), 
+      'os_pid': os_pid,
+      'session_id': session_id, 
+      'task_id': task_id, 
+      'task_type': task_type, 
+      'gen': gen,
+      'status': 'created',
+      'message': f'Task {task_id} created'
+    }
+    print(f'mock_task, writing initial log file')
+    flush_info(info, f)
+
+    arg_file = arg_file_name(task_id, task_type, gen)
+    info, task_args = read_args(info, os.path.join(session_log_path, arg_file))
+
+    print(f'mock_task, task_args are {task_args}')
+    flush_info(info, f)
+
+    length = task_args['length']
     for line_no in range(1, length+1):
       time.sleep(1.)
-      now = format_utcnow()
-
-      status, progress_counter, progress_total, result, errors = mock_status(line_no, length, error, cancel)
-      info = {
-        'time': now, 
-        'os_pid': os_pid,
-        'session_id': session_id, 
-        'task_id': task_id, 
-        'task_type': task_type, 
-        'gen': gen,
-        'status': status,
-        'message': f'Task {task_id} is {status} {line_no}'
-      }
-      if progress_counter is not None and progress_total is not None:
-        info['progress_counter'] = progress_counter
-        info['progress_total'] = progress_total
-        info['progress_phase'] = 'Compiling answers'
+      info, result, errors = mock_status(info, line_no, length, error, cancel)
 
       if started_at is None:
-        write_arg_file(os.path.join(session_log_path, arg_file_name(task_id, task_type, gen)), info)
-        info['started_at'] = started_at = now
+        info['started_at'] = started_at = info['time']
 
-      if running_at is None and status in ['running', 'completed']:
-        info['running_at'] = running_at = now
+      if running_at is None and info['status'] in ['running', 'completed']:
+        info['running_at'] = running_at = info['time']
         write_start = True
-
-      if status in ['canceled', 'completed']:
-        if status == 'completed' and len(errors) == 0:
+    
+      if info['status'] in ['canceled', 'completed']:
+        result_file = result_file_name(task_id, task_type, gen)
+        if info['status'] == 'completed' and len(errors) == 0:
           result_info = {
             'succeeded': True,
             'file': result_file,
@@ -144,35 +169,43 @@ def run_job(args):
             'errors': errors
           }
         info.update({
-          'completed_at': now,
+          'completed_at': info['time'],
           'result': result_info
         })
         write_result = True
 
       if write_start:
-        write_start_file(os.path.join(session_log_path, start_file_name(task_id, task_type, gen)), info)
+        print(f'mock_task, writing start file')
+        start_file = start_file_name(task_id, task_type, gen)
+        write_start_file(os.path.join(session_log_path, start_file), info)
         write_start = False
 
-      if write_result:
+      if write_result and result_file is not None:
+        print(f'mock_task, writing result file')
         write_result_file(os.path.join(session_log_path, result_file), info, result)
         write_result = False
 
-      json.dump(info, f)
-      f.write('\n')
-      f.flush()
+      flush_info(info, f)
       if write_result:
         break
+
+    print(f'mock_task, closing log file')
+
+
+def flush_info(info, f):
+  json.dump(info, f)
+  f.write('\n')
+  f.flush()
 
 if __name__ == '__main__':
   import argparse
   
   parser = argparse.ArgumentParser(description='Run a session task')
-  parser.add_argument('-p', '--log-path', help='directory containing log file', required=True)
+  parser.add_argument('-p', '--log-path', help='path containing log file', required=True)
   parser.add_argument('-s', '--session-id', help='session id', required=True)
   parser.add_argument('-i', '--task-id', help='task id', required=True)
   parser.add_argument('-t', '--task-type', help='task type', required=True)
-  parser.add_argument('-g', '--gen', help='generation number', type=int, required=True)
-  parser.add_argument('-l', '--length', help='number of lines', type=int, default=10)
+  parser.add_argument('-g', '--gen', help='gen', type=int, required=True)
   parser.add_argument('-c', '--cancel', help='generate canceled result', action='store_true')
   parser.add_argument('-e', '--error', help='generate error result', action='store_true')
   args = parser.parse_args()

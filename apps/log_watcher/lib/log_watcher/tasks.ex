@@ -7,6 +7,8 @@ defmodule LogWatcher.Tasks do
   alias LogWatcher.Repo
   alias LogWatcher.Tasks.{Session, Task}
 
+  require Logger
+
   ## PubSub utilities
   @spec session_topic(String.t()) :: String.t()
   def session_topic(session_id) do
@@ -15,11 +17,13 @@ defmodule LogWatcher.Tasks do
 
   @spec subscribe(String.t()) :: :ok | {:error, term()}
   def subscribe(topic) do
+    Logger.info("#{inspect(self())} subscribing to #{topic}")
     Phoenix.PubSub.subscribe(LogWatcher.PubSub, topic)
   end
 
   @spec broadcast(String.t(), term()) :: :ok | {:error, term()}
-  def broadcast(topic, message) do
+  def broadcast(topic, message) when is_tuple(message) do
+    Logger.info("#{inspect(self())} broadcasting to #{topic}: #{Kernel.elem(message, 0)}")
     Phoenix.PubSub.broadcast(LogWatcher.PubSub, topic, message)
   end
 
@@ -313,6 +317,13 @@ defmodule LogWatcher.Tasks do
         "updated_at" => updated_at
       })
     end)
+  end
+
+  @spec write_arg_file(String.t(), map()) :: :ok | {:error, term()}
+  def write_arg_file(arg_file_path, arg) do
+    with {:ok, content} <- Jason.encode(arg, pretty: [indent: "  "]) do
+      File.write(arg_file_path, content)
+    end
   end
 
   @spec read_arg_info(Task.t()) :: {:ok, term()} | {:error, term()}
