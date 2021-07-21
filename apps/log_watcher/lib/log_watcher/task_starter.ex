@@ -41,6 +41,7 @@ defmodule LogWatcher.TaskStarter do
         }
       }) do
     Logger.info("job #{id} task_id #{task_id} perform")
+
     gen =
       if is_binary(gen_arg) do
         String.to_integer(gen_arg)
@@ -114,7 +115,7 @@ defmodule LogWatcher.TaskStarter do
     # Start mock task script
     script_task =
       Elixir.Task.Supervisor.async_nolink(LogWatcher.TaskSupervisor, fn ->
-        run_mock(executable, script_path, session_log_path, session_id, task_id, task_type, gen)
+        run_mock(executable, script_path, start_args)
       end)
 
     # Process incoming messages to find a result
@@ -136,8 +137,8 @@ defmodule LogWatcher.TaskStarter do
     # {:snooze, seconds} — mark the job as snoozed and schedule it to run
     #    again seconds in the future.
     case result do
-      {:ok, task_info} when is_map(task_info) ->
-        {:ok, Map.put(task_info, :script_task, script_task)}
+      {:ok, result} when is_map(result) ->
+        {:ok, result}
 
       {:error, reason} ->
         {:discard, reason}
@@ -162,34 +163,47 @@ defmodule LogWatcher.TaskStarter do
   @spec run_mock(
           String.t(),
           String.t(),
-          String.t(),
-          String.t(),
-          String.t(),
-          String.t(),
-          integer()
+          map()
         ) ::
           :ok | {:error, integer()}
-  def run_mock(executable, script_path, session_log_path, session_id, task_id, task_type, gen) do
-    Logger.info("job #{task_id}: shelling out to #{executable}")
+  def run_mock(
+        executable,
+        script_path,
+        %{
+          session_log_path: session_log_path,
+          session_id: session_id,
+          task_id: task_id,
+          task_type: task_type,
+          gen: gen
+        } = start_args
+      ) do
+    basic_args = [
+      "--log-path",
+      session_log_path,
+      "--session-id",
+      session_id,
+      "--task-id",
+      task_id,
+      "--task-type",
+      task_type,
+      "--gen",
+      to_string(gen)
+    ]
+
+    script_args =
+      [:cancel, :error]
+      |> Enum.reduce(basic_args, fn key, acc ->
+        if Map.get(start_args, key, false) do
+          ["--#{key}" | acc]
+        else
+          acc
+        end
+      end)
+
+    Logger.info("job #{task_id}: shelling out to #{executable} with args #{inspect(script_args)}")
 
     {output, exit_status} =
-      System.cmd(
-        executable,
-        [
-          script_path,
-          "--log-path",
-          session_log_path,
-          "--session-id",
-          session_id,
-          "--task-id",
-          task_id,
-          "--task-type",
-          task_type,
-          "--gen",
-          to_string(gen)
-        ],
-        cd: Path.dirname(script_path)
-      )
+      System.cmd(executable, [script_path | script_args], cd: Path.dirname(script_path))
 
     Logger.info("job #{task_id}: script exited with #{exit_status}")
     Logger.info("job #{task_id}: output from script: #{inspect(output)}")
@@ -204,7 +218,7 @@ defmodule LogWatcher.TaskStarter do
     end
   end
 
-  @spec loop(String.t(), reference()) ::
+  @spec loop(String.t(), Elixir.Task.t()) ::
           {:ok, map()}
           | {:error,
              {:script_terminated, term()}
@@ -217,8 +231,7 @@ defmodule LogWatcher.TaskStarter do
     receive do
       {:task_started, file_name, info} ->
         Logger.info("job #{task_id}, loop received :task_started on #{file_name}")
-        result =
-          Map.merge(info, %{task_ref: task_ref, task_pid: task_pid})
+        result = Map.merge(info, %{script_task: task})
         Logger.info("job #{task_id}, loop returning :ok #{inspect(result)}")
         {:ok, result}
 

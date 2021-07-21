@@ -1,18 +1,21 @@
 #!/usr/bin/Rscript
 
+source("json_logging.R")
 source("script_startup.R")
+
+setup_logging <- function(args) {
+  log_file <- log_file_name(args$task_id, args$task_type, args$gen)
+  log_path <- file.path(args$log_path, log_file)
+  initLogging(log_path)
+  cat(paste0("logging setup done, will append to ", log_path, "\n"))
+}
 
 run_job <- function(args) {
   session_log_path <- args$log_path
   task_id <- args$task_id
   task_type <- args$task_type
   gen <- args$gen
-  log_file <- log_file_name(task_id, task_type, gen)
-  log_path = file.path(session_log_path, log_file)
 
-  initLogging(log_path)
-
-  session_id <- args$session_id
   error <- args$error
   cancel <- args$cancel
   started_at <- NULL
@@ -20,6 +23,10 @@ run_job <- function(args) {
   write_start <- FALSE
   write_result <- FALSE
 
+  cat(paste0("run_job cancel ", cancel, " error ", error, "\n"))
+  cat("writing first log message\n")
+
+  set_script_status("created")
   message <- paste0("Task ", task_id, " created")
   flog.info(message)
   cat("log file created\n")
@@ -27,8 +34,8 @@ run_job <- function(args) {
   arg_file <- arg_file_name(task_id, task_type, gen)
   arg_path <- file.path(session_log_path, arg_file)
   res <- read_arg_file(arg_path)
+  set_script_status(res$status)
 
-  options(daptics_script_status = res$status)
   flog.info(res$message)
   cat("read arg file\n")
 
@@ -37,7 +44,7 @@ run_job <- function(args) {
     Sys.sleep(1)
 
     res <- mock_status(task_id, line_no, num_lines, error, cancel)
-    options(daptics_script_status = res$status)
+    set_script_status(res$status)
 
     status <- res$status
     message <- res$message
@@ -91,16 +98,32 @@ run_job <- function(args) {
       cat("wrote result\n")
     }
 
-    res$status <- NULL
-    res$message <- NULL
-    logger_args <- c(message, res)
-    do.call(futile.logger::flog.info, logger_args)
+    log_res(message, res)
     cat(paste0("wrote line ", line_no, "\n"))
 
     if (write_result) {
       break
     }
   }
+}
+
+
+maybe_blowup <- function(error_flag) {
+  if (error_flag) {
+    blowup_a()
+  }
+}
+
+blowup_a <- function() {
+  blowup_b()
+}
+
+blowup_b <- function() {
+  blowup()
+}
+
+blowup <- function() {
+  stop("kaboom")
 }
 
 mock_status <- function(task_id, line_no, num_lines, error, cancel) {
@@ -140,6 +163,8 @@ mock_status <- function(task_id, line_no, num_lines, error, cancel) {
     progress <- NULL
   }
 
+  maybe_blowup(error)
+
   list(
     status = status,
     message = paste0("Task ", task_id, " ", status, " on line ", line_no),
@@ -149,53 +174,11 @@ mock_status <- function(task_id, line_no, num_lines, error, cancel) {
   )
 }
 
-write_start_file <- function(path, info) {
-  info$time  <- format_utcnow()
-  info$session_id <- getOption("daptics_session_id")
-  info$session_log_path <- getOption("daptics_session_log_path")
-  info$task_id  <- getOption("daptics_task_id")
-  info$task_type  <- getOption("daptics_task_type")
-  info$gen  <- getOption("daptics_task_gen")
-  info$os_pid  <- getOption("daptics_script_pid")
-  contents <- jsonlite::toJSON(info,
-    Date = "ISO8601",
-    POSIXt = "ISO8601",
-    factor = "string",
-    null = "null",
-    na = "null",
-    auto_unbox = TRUE,
-    pretty = TRUE
-  )
-  write(contents, path)
-}
-
-write_result_file <- function(path, info, result_data) {
-  info$time  <- format_utcnow()
-  info$session_id <- getOption("daptics_session_id")
-  info$session_log_path <- getOption("daptics_session_log_path")
-  info$task_id  <- getOption("daptics_task_id")
-  info$task_type  <- getOption("daptics_task_type")
-  info$gen  <- getOption("daptics_task_gen")
-  info$os_pid  <- getOption("daptics_script_pid")
-  info$result <- list(
-    succeeded = info$result$succeeded,
-    errors = info$result$errors,
-    data = result_data
-  )
-  contents <- jsonlite::toJSON(info,
-    Date = "ISO8601",
-    POSIXt = "ISO8601",
-    factor = "string",
-    null = "null",
-    na = "null",
-    auto_unbox = TRUE,
-    pretty = TRUE
-  )
-  write(contents, path)
-}
-
 
 # Execution starts here
 
 args <- scriptStartup()
-run_job(args)
+setup_logging(args)
+# res <- run_job(args)
+res <- try_capture_stack(run_job(args))
+log_error(res, args)

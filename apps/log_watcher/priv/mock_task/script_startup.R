@@ -31,18 +31,18 @@ scriptStartup <- function() {
   p <- argparser::add_argument(p, "--task-id", "task id", short = "i")
   p <- argparser::add_argument(p, "--task-type", "task id", short = "t")
   p <- argparser::add_argument(p, "--gen", "gen", short = "g", type = "integer")
-  p <- argparser::add_argument(p, "--cancel", "TRUE to generate canceled result", short = "c", default = FALSE)
-  p <- argparser::add_argument(p, "--error", "TRUE to generate error result", short = "e", default = FALSE)
+  p <- argparser::add_argument(p, "--cancel", "TRUE to generate canceled result", short = "c", type = "boolean", flag = TRUE)
+  p <- argparser::add_argument(p, "--error", "TRUE to generate error result", short = "e", type = "boolean", flag = TRUE)
 
   # Parse the command line arguments
   args <- argparser::parse_args(p, argv = pa$argv)
   cat("parsed script args\n")
 
-  stopifnot(!is.na(args$log_path))
-  stopifnot(!is.na(args$session_id))
-  stopifnot(!is.na(args$task_id))
-  stopifnot(!is.na(args$task_type))
-  stopifnot(!is.na(args$gen))
+  stopifnot(length(args$log_path) == 1)
+  stopifnot(length(args$session_id) == 1)
+  stopifnot(length(args$task_id) == 1)
+  stopifnot(length(args$task_type) == 1)
+  stopifnot(length(args$gen) == 1)
 
   # Save important data in R options
   context <- list(
@@ -178,16 +178,16 @@ read_arg_file <- function(arg_path) {
   args <- jsonlite::read_json(arg_path, simplifyVector = TRUE)
   task_id <- args$task_id
 
-  opt_session_id = getOption("daptics_session_id")
+  opt_session_id <- getOption("daptics_session_id")
   stopifnot(!is.null(args$session_id))
   stopifnot(identical(args$session_id, opt_session_id))
-  opt_task_id = getOption("daptics_task_id")
+  opt_task_id <- getOption("daptics_task_id")
   stopifnot(!is.null(task_id))
   stopifnot(identical(task_id, opt_task_id))
-  opt_task_type = getOption("daptics_task_type")
+  opt_task_type <- getOption("daptics_task_type")
   stopifnot(!is.null(args$task_type))
   stopifnot(identical(args$task_type, opt_task_type))
-  opt_gen = getOption("daptics_task_gen")
+  opt_gen <- getOption("daptics_task_gen")
   stopifnot(!is.null(args$gen))
   stopifnot(identical(args$gen, opt_gen))
 
