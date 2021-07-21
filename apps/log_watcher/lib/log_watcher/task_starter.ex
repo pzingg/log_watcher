@@ -26,7 +26,9 @@ defmodule LogWatcher.TaskStarter do
       }) do
     Logger.info("job #{id} task_id #{task_id} perform")
     gen = String.to_integer(gen_str)
-    watch_and_run(session_id, session_log_path, task_id, task_type, gen)
+
+    Tasks.create_session!(session_id, session_log_path)
+    |> watch_and_run(task_id, task_type, gen)
   end
 
   def perform(%Oban.Job{id: id, args: args}) do
@@ -34,21 +36,26 @@ defmodule LogWatcher.TaskStarter do
     {:discard, "Not a task job"}
   end
 
-  @spec watch_and_run(Session.t(), String.t(), String.t(), integer()) ::
+  @spec watch_and_run(Session.t(), String.t(), String.t(), integer(), Keyword.t()) ::
           {:ok, term()} | {:discard, term()}
   def watch_and_run(
         %Session{session_id: session_id, session_log_path: session_log_path},
         task_id,
         task_type,
-        gen
+        gen,
+        opts \\ []
       ) do
-    watch_and_run(session_id, session_log_path, task_id, task_type, gen)
-  end
-
-  @spec watch_and_run(String.t(), String.t(), String.t(), String.t(), integer()) ::
-          {:ok, term()} | {:discard, term()}
-  def watch_and_run(session_id, session_log_path, task_id, task_type, gen) do
     log_file = Task.log_file_name(task_id, task_type, gen)
+    script_file = Keyword.get(opts, :script_file, "mock_task.py")
+    executable =
+      if String.ends_with?(script_file, ".R") do
+        System.find_executable("Rscript")
+      else
+        System.find_executable("python3")
+      end
+    if is_nil(executable) do
+      raise "no executable found for script file #{script_file}"
+    end
 
     # Set up to receive messages
     Logger.info(
@@ -70,21 +77,21 @@ defmodule LogWatcher.TaskStarter do
       task_id: task_id,
       task_type: task_type,
       gen: gen,
-      length: 5 + :rand.uniform(6),
+      num_lines: 5 + :rand.uniform(6),
       space_type: "mixture"
     }
 
     Logger.info("job #{task_id}: write arg file to #{arg_path}")
     :ok = Tasks.write_arg_file(arg_path, task_arg)
 
-    # Start mock task script
-    script_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "mock_task.py"])
+    script_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", script_file])
 
     Logger.info("job #{task_id}: run mock script at #{script_path}")
 
+    # Start mock task script
     script_task =
       Elixir.Task.Supervisor.async_nolink(LogWatcher.TaskSupervisor, fn ->
-        run_mock(script_path, session_log_path, session_id, task_id, task_type, gen)
+        run_mock(executable, script_path, session_log_path, session_id, task_id, task_type, gen)
       end)
 
     # Process incoming messages to find a result
@@ -127,16 +134,9 @@ defmodule LogWatcher.TaskStarter do
     end
   end
 
-  @spec run_mock(String.t(), String.t(), String.t(), String.t(), String.t(), integer()) ::
+  @spec run_mock(String.t(), String.t(), String.t(), String.t(), String.t(), String.t(), integer()) ::
           :ok | {:error, integer()}
-  def run_mock(script_path, session_log_path, session_id, task_id, task_type, gen) do
-    executable =
-      if String.ends_with?(script_path, ".R") do
-        "Rscript"
-      else
-        "python3"
-      end
-
+  def run_mock(executable, script_path, session_log_path, session_id, task_id, task_type, gen) do
     Logger.info("job #{task_id}: shelling out to #{executable}")
 
     {output, exit_status} =
@@ -171,11 +171,16 @@ defmodule LogWatcher.TaskStarter do
     end
   end
 
-  @spec loop(String.t()) :: {:ok, map()} | {:error, :script_error | :unexpected_close | :timeout}
+  @spec loop(String.t()) :: {:ok, map()} | {:error, :script_terminated | :script_error | :timeout}
   def loop(task_id) do
     Logger.info("job #{task_id}: re-entering loop")
 
     receive do
+      {:DOWN, ref, :process, pid, reason} ->
+        Logger.error("job #{task_id}, loop received :DOWN")
+        Logger.info("job #{task_id}, loop returning :error")
+        {:error, :script_terminated}
+
       {:script_error, _exit_status, output} ->
         Logger.error("job #{task_id}, loop received :script_error, output was #{output}")
         Logger.info("job #{task_id}, loop returning :error")
@@ -189,11 +194,6 @@ defmodule LogWatcher.TaskStarter do
       {:task_updated, file_name, _info} ->
         Logger.info("job #{task_id}, loop received :task_updated on #{file_name}")
         loop(task_id)
-
-      {:task_file_closed, file_name} ->
-        Logger.error("job #{task_id}, loop received :task_file_closed on #{file_name}")
-        Logger.info("job #{task_id}, loop returning :error")
-        {:error, :unexpected_close}
 
       other ->
         Logger.info("job #{task_id}, loop received #{inspect(other)}")

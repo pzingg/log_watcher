@@ -15,7 +15,7 @@ import time
 def format_utcnow():
   return datetime.datetime.utcnow().isoformat(timespec='milliseconds')
 
-def read_args(info, arg_path):
+def read_arg_file(info, arg_path):
   with open(arg_path, 'rt') as f:
     args = json.load(f)
     assert info['session_id'] == args['session_id']
@@ -34,7 +34,7 @@ def read_args(info, arg_path):
 
     return (info, args)
 
-def mock_status(info, line_no, length, error, cancel):
+def mock_status(info, line_no, num_lines, error, cancel):
   progress_counter = None
   progress_total = None
   result = None
@@ -43,10 +43,10 @@ def mock_status(info, line_no, length, error, cancel):
     status = 'started'
   elif line_no == 2:
     status = 'validating'
-  elif line_no < length:
+  elif line_no < num_lines:
     status = 'running'
     progress_counter = line_no - 2
-    progress_total = length - 3
+    progress_total = num_lines - 3
   else:
     if cancel:
       status = 'canceled'
@@ -122,7 +122,6 @@ def run_job(args):
     write_start = False
     write_result = False
 
-
     info = {
       'time': format_utcnow(), 
       'os_pid': os_pid,
@@ -137,15 +136,15 @@ def run_job(args):
     flush_info(info, f)
 
     arg_file = arg_file_name(task_id, task_type, gen)
-    info, task_args = read_args(info, os.path.join(session_log_path, arg_file))
+    info, task_args = read_arg_file(info, os.path.join(session_log_path, arg_file))
 
     print(f'mock_task, task_args are {task_args}')
     flush_info(info, f)
 
-    length = task_args['length']
-    for line_no in range(1, length+1):
+    num_lines = task_args['num_lines']
+    for line_no in range(1, num_lines+1):
       time.sleep(1.)
-      info, result, errors = mock_status(info, line_no, length, error, cancel)
+      info, result, errors = mock_status(info, line_no, num_lines, error, cancel)
 
       if started_at is None:
         info['started_at'] = started_at = info['time']

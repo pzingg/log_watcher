@@ -340,6 +340,11 @@ defmodule LogWatcher.FileWatcher do
         end
 
       Tasks.broadcast(topic, {:task_updated, file_name, info})
+
+      if Enum.member?(["completed", "canceled"], info[:status]) do
+        Tasks.broadcast(topic, {:task_completed, file_name})
+      end
+
       next_acc
     end)
   end
@@ -347,10 +352,6 @@ defmodule LogWatcher.FileWatcher do
   @spec handle_close(String.t(), String.t()) :: :ok
   defp handle_close(session_id, file_name) do
     Logger.info("file #{file_name} closed")
-
-    Tasks.session_topic(session_id)
-    |> Tasks.broadcast({:task_log_closed, file_name})
-
     :ok
   end
 end
