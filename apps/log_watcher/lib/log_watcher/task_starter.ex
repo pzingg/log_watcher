@@ -11,6 +11,21 @@ defmodule LogWatcher.TaskStarter do
   #    task_id: task_id, task_type: "update", gen: 2}
   #    |> LogWatcher.TaskStarter.new()
   #    |> Oban.insert()
+  @doc """
+  Create a job and schedule it.
+  """
+  @spec work(Session.t(), String.t(), String.t(), map()) ::
+          {:ok, Oban.Job.t()} | {:error, Oban.Job.changeset()} | {:error, term()}
+  def work(session, task_id, task_type, task_args) do
+    result =
+      Map.from_struct(session)
+      |> Map.merge(%{task_id: task_id, task_type: task_type, task_args: task_args})
+      |> LogWatcher.TaskStarter.new()
+      |> Oban.insert()
+
+    Logger.info("work result #{inspect(result)}")
+    result
+  end
 
   @impl Oban.Worker
   @spec perform(Oban.Job.t()) :: {:ok, term()} | {:discard, term()}
@@ -19,16 +34,22 @@ defmodule LogWatcher.TaskStarter do
         args: %{
           "session_id" => session_id,
           "session_log_path" => session_log_path,
+          "gen" => gen_arg,
           "task_id" => task_id,
           "task_type" => task_type,
-          "gen" => gen_str
+          "task_args" => task_args
         }
       }) do
     Logger.info("job #{id} task_id #{task_id} perform")
-    gen = String.to_integer(gen_str)
+    gen =
+      if is_binary(gen_arg) do
+        String.to_integer(gen_arg)
+      else
+        gen_arg
+      end
 
-    Tasks.create_session!(session_id, session_log_path)
-    |> watch_and_run(task_id, task_type, gen)
+    Tasks.create_session!(session_id, session_log_path, gen)
+    |> watch_and_run(task_id, task_type, task_args)
   end
 
   def perform(%Oban.Job{id: id, args: args}) do
@@ -36,23 +57,25 @@ defmodule LogWatcher.TaskStarter do
     {:discard, "Not a task job"}
   end
 
-  @spec watch_and_run(Session.t(), String.t(), String.t(), integer(), Keyword.t()) ::
+  @spec watch_and_run(Session.t(), String.t(), String.t(), map(), Keyword.t()) ::
           {:ok, term()} | {:discard, term()}
   def watch_and_run(
-        %Session{session_id: session_id, session_log_path: session_log_path},
+        %Session{session_id: session_id, session_log_path: session_log_path, gen: gen},
         task_id,
         task_type,
-        gen,
+        task_args,
         opts \\ []
       ) do
     log_file = Task.log_file_name(task_id, task_type, gen)
     script_file = Keyword.get(opts, :script_file, "mock_task.py")
+
     executable =
       if String.ends_with?(script_file, ".R") do
         System.find_executable("Rscript")
       else
         System.find_executable("python3")
       end
+
     if is_nil(executable) do
       raise "no executable found for script file #{script_file}"
     end
@@ -71,18 +94,18 @@ defmodule LogWatcher.TaskStarter do
     # Write arg file
     arg_path = Path.join(session_log_path, Task.arg_file_name(task_id, task_type, gen))
 
-    task_arg = %{
-      session_id: session_id,
-      session_log_path: session_log_path,
-      task_id: task_id,
-      task_type: task_type,
-      gen: gen,
-      num_lines: 5 + :rand.uniform(6),
-      space_type: "mixture"
-    }
+    start_args =
+      Map.merge(task_args, %{
+        session_id: session_id,
+        session_log_path: session_log_path,
+        task_id: task_id,
+        task_type: task_type,
+        gen: gen
+      })
+      |> Map.put_new(:num_lines, 10)
 
     Logger.info("job #{task_id}: write arg file to #{arg_path}")
-    :ok = Tasks.write_arg_file(arg_path, task_arg)
+    :ok = Tasks.write_arg_file(arg_path, start_args)
 
     script_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", script_file])
 
@@ -97,7 +120,7 @@ defmodule LogWatcher.TaskStarter do
     # Process incoming messages to find a result
     Logger.info("job #{task_id}: script task ref is #{inspect(script_task.ref)}")
     Logger.info("job #{task_id}: process messages until :task_started is received")
-    result = loop(task_id, script_task.ref)
+    result = loop(task_id, script_task)
 
     # Return disposition for Oban
     Logger.info("job #{task_id}: result is #{inspect(result)}")
@@ -124,6 +147,7 @@ defmodule LogWatcher.TaskStarter do
   @spec yield_or_shutdown_task(Elixir.Task.t(), integer()) :: {:ok, term()} | {:error, :timeout}
   def yield_or_shutdown_task(task, timeout) do
     Logger.info("#{inspect(self())} yielding to script task...")
+
     case Elixir.Task.yield(task, timeout) || Elixir.Task.shutdown(task) do
       {:ok, result} ->
         Logger.info("after yield, script task returned #{inspect(result)}")
@@ -135,7 +159,15 @@ defmodule LogWatcher.TaskStarter do
     end
   end
 
-  @spec run_mock(String.t(), String.t(), String.t(), String.t(), String.t(), String.t(), integer()) ::
+  @spec run_mock(
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t(),
+          integer()
+        ) ::
           :ok | {:error, integer()}
   def run_mock(executable, script_path, session_log_path, session_id, task_id, task_type, gen) do
     Logger.info("job #{task_id}: shelling out to #{executable}")
@@ -172,33 +204,49 @@ defmodule LogWatcher.TaskStarter do
     end
   end
 
-  @spec loop(String.t(), reference()) :: {:ok, map()} | {:error, :script_terminated | :script_error | :timeout}
-  def loop(task_id, task_ref) do
+  @spec loop(String.t(), reference()) ::
+          {:ok, map()}
+          | {:error,
+             {:script_terminated, term()}
+             | {:script_error, integer()}
+             | {:script_crashed, term()}
+             | :timeout}
+  def loop(task_id, %Elixir.Task{ref: task_ref, pid: task_pid} = task) do
     Logger.info("job #{task_id}: re-entering loop")
 
     receive do
-      {:DOWN, task_ref, :process, pid, reason} ->
-        Logger.error("job #{task_id}, loop received :DOWN")
-        Logger.info("job #{task_id}, loop returning :error")
-        {:error, :script_terminated}
-
-      {:script_error, _exit_status, output} ->
-        Logger.error("job #{task_id}, loop received :script_error, output was #{output}")
-        Logger.info("job #{task_id}, loop returning :error")
-        {:error, :script_error}
-
       {:task_started, file_name, info} ->
         Logger.info("job #{task_id}, loop received :task_started on #{file_name}")
-        Logger.info("job #{task_id}, loop returning :ok #{inspect(info)}")
-        {:ok, info}
+        result =
+          Map.merge(info, %{task_ref: task_ref, task_pid: task_pid})
+        Logger.info("job #{task_id}, loop returning :ok #{inspect(result)}")
+        {:ok, result}
+
+      {^task_ref, task_result} ->
+        Logger.error("job #{task_id}, loop received task result for #{inspect(task_ref)}")
+        Logger.info("job #{task_id}, loop returning :script_terminated")
+        {:error, {:script_terminated, task_result}}
+
+      {:script_error, exit_status, output} ->
+        Logger.error(
+          "job #{task_id}, loop received :script_error, status #{exit_status} output #{output}"
+        )
+
+        Logger.info("job #{task_id}, loop returning :script_error")
+        {:error, {:script_error, exit_status}}
+
+      {:DOWN, ^task_ref, :process, _pid, reason} ->
+        Logger.error("job #{task_id}, loop received :DOWN")
+        Logger.info("job #{task_id}, loop returning :script_crashed")
+        {:error, {:script_crashed, reason}}
 
       {:task_updated, file_name, _info} ->
         Logger.info("job #{task_id}, loop received :task_updated on #{file_name}")
-        loop(task_id, task_ref)
+        loop(task_id, task)
 
       other ->
         Logger.info("job #{task_id}, loop received #{inspect(other)}")
-        loop(task_id, task_ref)
+        loop(task_id, task)
     after
       120_000 ->
         Logger.error("job #{task_id}: loop timed out")

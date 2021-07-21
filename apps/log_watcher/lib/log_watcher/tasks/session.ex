@@ -4,10 +4,11 @@ defmodule LogWatcher.Tasks.Session do
   Sessions are not stored in a SQL database.
   """
 
-  defstruct [:session_id, :session_log_path]
+  defstruct [:session_id, :session_log_path, gen: -1]
 
   @type t :: %__MODULE__{
           session_id: String.t() | nil,
-          session_log_path: String.t() | nil
+          session_log_path: String.t() | nil,
+          gen: integer()
         }
 end

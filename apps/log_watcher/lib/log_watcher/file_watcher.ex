@@ -327,6 +327,7 @@ defmodule LogWatcher.FileWatcher do
     Logger.info("file #{file_name} start_sent #{start_sent} got #{Enum.count(lines)} lines")
 
     topic = Tasks.session_topic(session_id)
+
     Enum.reduce(lines, start_sent, fn line, acc ->
       info = Jason.decode!(line, keys: :atoms)
       Logger.info("acc #{acc} status #{info[:status]}")

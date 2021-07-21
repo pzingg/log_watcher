@@ -75,28 +75,31 @@ defmodule LogWatcher.Tasks do
   @doc """
   Create a Session struct object from an id and path.
   """
-  @spec create_session!(String.t(), String.t()) :: Session.t()
-  def create_session!(session_id, session_log_path) do
-    create_session(session_id, session_log_path)
+  @spec create_session!(String.t(), String.t(), integer()) :: Session.t()
+  def create_session!(session_id, session_log_path, gen) do
+    create_session(session_id, session_log_path, gen)
     |> LogWatcher.raise_input_error("Errors reading session", :session_id)
   end
 
-  @spec create_session(String.t(), String.t()) ::
+  @spec create_session(String.t(), String.t(), integer()) ::
           {:ok, Session.t()} | {:error, Ecto.Changeset.t()}
-  def create_session(session_id, session_log_path) do
+  def create_session(session_id, session_log_path, gen) do
     %{
       "session_id" => session_id,
-      "session_log_path" => session_log_path
+      "session_log_path" => session_log_path,
+      "gen" => gen
     }
     |> normalize_session_create_input()
+    |> Ecto.Changeset.apply_action(:input)
   end
 
   @session_create_input_schema %{
     session_id: [:string, required: true],
-    session_log_path: [:string, required: true]
+    session_log_path: [:string, required: true],
+    gen: [:integer, required: true]
   }
 
-  @spec normalize_session_create_input(map()) :: {:ok, Session.t()} | {:error, Ecto.Changeset.t()}
+  @spec normalize_session_create_input(map()) :: Ecto.Changeset.t()
   defp normalize_session_create_input(params) do
     {types, permitted_fields, required_fields} =
       LogWatcher.parse_input_types(@session_create_input_schema)
@@ -104,7 +107,27 @@ defmodule LogWatcher.Tasks do
     {%Session{}, types}
     |> Ecto.Changeset.cast(params, permitted_fields)
     |> Ecto.Changeset.validate_required(required_fields)
-    |> Ecto.Changeset.apply_action(:insert)
+  end
+
+  @spec update_session(Session.t(), map()) ::
+          {:ok, Session.t()} | {:error, Ecto.Changeset.t()}
+  def update_session(session, params) do
+    normalize_session_update_input(session, params)
+    |> Ecto.Changeset.apply_action(:update)
+  end
+
+  @session_update_input_schema %{
+    gen: [:integer, required: true]
+  }
+
+  @spec normalize_session_update_input(Session.t(), map()) :: Ecto.Changeset.t()
+  defp normalize_session_update_input(session, params) do
+    {types, permitted_fields, required_fields} =
+      LogWatcher.parse_input_types(@session_update_input_schema)
+
+    {session, types}
+    |> Ecto.Changeset.cast(params, permitted_fields)
+    |> Ecto.Changeset.validate_required(required_fields)
   end
 
   ### Task files on disk
@@ -184,9 +207,12 @@ defmodule LogWatcher.Tasks do
            )
            |> Map.merge(session_and_archive_params),
          # Schemaless changesets
-         {:ok, task} <- normalize_task_create_input(create_params),
+         {:ok, task} <-
+           normalize_task_create_input(create_params)
+           |> Ecto.Changeset.apply_action(:insert),
          status_params <- read_task_status(task) do
       normalize_task_update_status_input(task, status_params)
+      |> Ecto.Changeset.apply_action(:update)
     end
   end
 
@@ -200,7 +226,7 @@ defmodule LogWatcher.Tasks do
     archived?: [:boolean, required: true]
   }
 
-  @spec normalize_task_create_input(map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  @spec normalize_task_create_input(map()) :: Ecto.Changeset.t()
   defp normalize_task_create_input(params) do
     {types, permitted_fields, required_fields} =
       LogWatcher.parse_input_types(@task_create_input_schema)
@@ -209,7 +235,6 @@ defmodule LogWatcher.Tasks do
     |> Ecto.Changeset.cast(params, permitted_fields)
     |> Ecto.Changeset.validate_required(required_fields)
     |> validate_singleton_task_log_file()
-    |> Ecto.Changeset.apply_action(:insert)
   end
 
   @spec validate_singleton_task_log_file(Ecto.Changeset.t()) :: Ecto.Changeset.t()
@@ -251,8 +276,7 @@ defmodule LogWatcher.Tasks do
     errors: {:array, :map}
   }
 
-  @spec normalize_task_update_status_input(Task.t(), map()) ::
-          {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  @spec normalize_task_update_status_input(Task.t(), map()) :: Ecto.Changeset.t()
   defp normalize_task_update_status_input(%Task{} = task, params) do
     {types, permitted_fields, required_fields} =
       LogWatcher.parse_input_types(@task_update_status_input_schema)
@@ -260,7 +284,6 @@ defmodule LogWatcher.Tasks do
     {task, types}
     |> Ecto.Changeset.cast(params, permitted_fields)
     |> Ecto.Changeset.cast(params, required_fields)
-    |> Ecto.Changeset.apply_action(:update)
   end
 
   @spec read_task_status(Task.t()) :: map()
