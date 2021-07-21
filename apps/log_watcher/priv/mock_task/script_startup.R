@@ -36,8 +36,7 @@ scriptStartup <- function() {
 
   # Parse the command line arguments
   args <- argparser::parse_args(p, argv = pa$argv)
-  cat("arg_parser done:")
-  cat(jsonlite::toJSON(args))
+  cat("parsed script args\n")
 
   stopifnot(!is.na(args$log_path))
   stopifnot(!is.na(args$session_id))

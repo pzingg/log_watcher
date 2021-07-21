@@ -95,8 +95,9 @@ defmodule LogWatcher.TaskStarter do
       end)
 
     # Process incoming messages to find a result
+    Logger.info("job #{task_id}: script task ref is #{inspect(script_task.ref)}")
     Logger.info("job #{task_id}: process messages until :task_started is received")
-    result = loop(task_id)
+    result = loop(task_id, script_task.ref)
 
     # Return disposition for Oban
     Logger.info("job #{task_id}: result is #{inspect(result)}")
@@ -171,12 +172,12 @@ defmodule LogWatcher.TaskStarter do
     end
   end
 
-  @spec loop(String.t()) :: {:ok, map()} | {:error, :script_terminated | :script_error | :timeout}
-  def loop(task_id) do
+  @spec loop(String.t(), reference()) :: {:ok, map()} | {:error, :script_terminated | :script_error | :timeout}
+  def loop(task_id, task_ref) do
     Logger.info("job #{task_id}: re-entering loop")
 
     receive do
-      {:DOWN, ref, :process, pid, reason} ->
+      {:DOWN, task_ref, :process, pid, reason} ->
         Logger.error("job #{task_id}, loop received :DOWN")
         Logger.info("job #{task_id}, loop returning :error")
         {:error, :script_terminated}
@@ -193,11 +194,11 @@ defmodule LogWatcher.TaskStarter do
 
       {:task_updated, file_name, _info} ->
         Logger.info("job #{task_id}, loop received :task_updated on #{file_name}")
-        loop(task_id)
+        loop(task_id, task_ref)
 
       other ->
         Logger.info("job #{task_id}, loop received #{inspect(other)}")
-        loop(task_id)
+        loop(task_id, task_ref)
     after
       120_000 ->
         Logger.error("job #{task_id}: loop timed out")

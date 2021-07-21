@@ -22,6 +22,7 @@ run_job <- function(args) {
 
   message <- paste0("Task ", task_id, " created")
   flog.info(message)
+  cat("log file created\n")
 
   arg_file <- arg_file_name(task_id, task_type, gen)
   arg_path <- file.path(session_log_path, arg_file)
@@ -29,6 +30,7 @@ run_job <- function(args) {
 
   options(daptics_script_status = res$status)
   flog.info(res$message)
+  cat("read arg file\n")
 
   num_lines <- res$args$num_lines
   for (line_no in 1:num_lines) {
@@ -79,20 +81,22 @@ run_job <- function(args) {
       start_file <- start_file_name(task_id, task_type, gen)
       start_path <- file.path(session_log_path, start_file)
       write_start_file(start_path, res)
+      cat("wrote start\n")
       write_start <- FALSE
     }
 
     if (write_result && !is.null(result_file)) {
       result_path <- file.path(session_log_path, result_file)
       write_result_file(result_path, res, result)
+      cat("wrote result\n")
     }
 
     res$status <- NULL
     res$message <- NULL
     logger_args <- c(message, res)
-    cat(jsonlite::toJSON(logger_args))
-
     do.call(futile.logger::flog.info, logger_args)
+    cat(paste0("wrote line ", line_no, "\n"))
+
     if (write_result) {
       break
     }
