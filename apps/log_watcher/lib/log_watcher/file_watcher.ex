@@ -34,7 +34,7 @@ defmodule LogWatcher.FileWatcher do
 
   defimpl String.Chars, for: LogWatcher.FileWatcher.WatchedFile do
     def to_string(
-          %WatchedFile{stream: stream, position: position, start_sent: start_sent} = watched
+          %WatchedFile{stream: stream, position: position, start_sent: start_sent}
         ) do
       "%LogWatcher.FileWatcher.WatchedFile{stream: #{stream.path}, position: #{position}, start_sent: #{
         start_sent
@@ -351,7 +351,7 @@ defmodule LogWatcher.FileWatcher do
   end
 
   @spec handle_close(String.t(), String.t()) :: :ok
-  defp handle_close(session_id, file_name) do
+  defp handle_close(_session_id, file_name) do
     Logger.info("file #{file_name} closed")
     :ok
   end

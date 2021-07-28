@@ -225,7 +225,7 @@ defmodule LogWatcher.TaskStarter do
              | {:script_error, integer()}
              | {:script_crashed, term()}
              | :timeout}
-  def loop(task_id, %Elixir.Task{ref: task_ref, pid: task_pid} = task) do
+  def loop(task_id, %Elixir.Task{ref: task_ref, pid: _task_pid} = task) do
     Logger.info("job #{task_id}: re-entering loop")
 
     receive do

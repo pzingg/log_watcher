@@ -4,47 +4,47 @@ defmodule LogWatcher.Tasks.Task do
   Tasks are not stored in a SQL database.
   """
 
-  defstruct task_id: nil,
-            session_id: nil,
-            session_log_path: nil,
-            log_prefix: nil,
-            task_type: nil,
-            gen: nil,
-            archived?: false,
-            os_pid: nil,
-            status: nil,
-            progress_counter: nil,
-            progress_total: nil,
-            progress_phase: nil,
-            last_message: nil,
-            created_at: nil,
-            running_at: nil,
-            completed_at: nil,
-            updated_at: nil,
-            result: nil,
-            errors: []
+  use TypedStruct
 
-  @type t :: %__MODULE__{
-          task_id: String.t() | nil,
-          session_id: String.t() | nil,
-          session_log_path: String.t() | nil,
-          log_prefix: String.t() | nil,
-          task_type: String.t() | nil,
-          gen: integer() | nil,
-          archived?: boolean(),
-          os_pid: integer() | nil,
-          status: String.t() | nil,
-          progress_counter: integer() | nil,
-          progress_total: integer() | nil,
-          progress_phase: String.t() | nil,
-          last_message: String.t() | nil,
-          created_at: NaiveDateTime.t() | nil,
-          running_at: NaiveDateTime.t() | nil,
-          completed_at: NaiveDateTime.t() | nil,
-          updated_at: NaiveDateTime.t() | nil,
-          result: term() | nil,
-          errors: [term()]
-        }
+  typedstruct do
+    @typedoc "A daptics task constructed from log files"
+
+    plugin TypedStructEctoChangeset
+    field :task_id, String.t(), enforce: true
+    field :session_id, String.t(), enforce: true
+    field :session_log_path, String.t(), enforce: true
+    field :log_prefix, String.t(), enforce: true
+    field :task_type, String.t(), enforce: true
+    field :gen, integer(), enforce: true
+    field :archived?, boolean(), enforce: true
+    field :os_pid, integer(), enforce: true
+    field :status, String.t(), enforce: true
+    field :created_at, NaiveDateTime.t(), enforce: true
+    field :updated_at, NaiveDateTime.t(), enforce: true
+    field :running_at, NaiveDateTime.t()
+    field :completed_at, NaiveDateTime.t()
+    field :progress_counter, integer()
+    field :progress_total, integer()
+    field :progress_phase, String.t()
+    field :last_message, String.t()
+    field :result, term()
+    field :errors, [term()], default: []
+  end
+
+  def new() do
+    nil_values =
+      @enforce_keys
+      |> Enum.map(fn key -> {key, nil} end)
+    Kernel.struct(__MODULE__, nil_values)
+  end
+
+  def required_fields(fields \\ [])
+  def required_fields([]), do: @enforce_keys
+  def required_fields(fields) when is_list(fields), do: @enforce_keys -- fields
+
+  def changeset_fields(), do: Map.keys(__changeset__())
+
+  def changeset_types(), do: @changeset_fields
 
   # See https://medium.com/very-big-things/towards-maintainable-elixir-the-core-and-the-interface-c267f0da43
   # for tips on architecting schemaless changesets, input normalization, and contexts.

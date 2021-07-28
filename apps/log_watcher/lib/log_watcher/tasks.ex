@@ -93,20 +93,13 @@ defmodule LogWatcher.Tasks do
     |> Ecto.Changeset.apply_action(:input)
   end
 
-  @session_create_input_schema %{
-    session_id: [:string, required: true],
-    session_log_path: [:string, required: true],
-    gen: [:integer, required: true]
-  }
-
   @spec normalize_session_create_input(map()) :: Ecto.Changeset.t()
   defp normalize_session_create_input(params) do
-    {types, permitted_fields, required_fields} =
-      LogWatcher.parse_input_types(@session_create_input_schema)
+    fields = [:session_id, :session_log_path, :gen]
 
-    {%Session{}, types}
-    |> Ecto.Changeset.cast(params, permitted_fields)
-    |> Ecto.Changeset.validate_required(required_fields)
+    Session.new()
+    |> Ecto.Changeset.cast(params, fields)
+    |> Ecto.Changeset.validate_required(Session.required_fields(fields))
   end
 
   @spec update_session(Session.t(), map()) ::
@@ -116,18 +109,13 @@ defmodule LogWatcher.Tasks do
     |> Ecto.Changeset.apply_action(:update)
   end
 
-  @session_update_input_schema %{
-    gen: [:integer, required: true]
-  }
-
   @spec normalize_session_update_input(Session.t(), map()) :: Ecto.Changeset.t()
   defp normalize_session_update_input(session, params) do
-    {types, permitted_fields, required_fields} =
-      LogWatcher.parse_input_types(@session_update_input_schema)
+    fields = [:gen]
 
-    {session, types}
-    |> Ecto.Changeset.cast(params, permitted_fields)
-    |> Ecto.Changeset.validate_required(required_fields)
+    session
+    |> Ecto.Changeset.cast(params, fields)
+    |> Ecto.Changeset.validate_required(Session.required_fields(fields))
   end
 
   ### Task files on disk
@@ -216,24 +204,21 @@ defmodule LogWatcher.Tasks do
     end
   end
 
-  @task_create_input_schema %{
-    task_id: [:string, required: true],
-    session_id: [:string, required: true],
-    session_log_path: [:string, required: true],
-    log_prefix: [:string, required: true],
-    task_type: [:string, required: true],
-    gen: [:integer, required: true],
-    archived?: [:boolean, required: true]
-  }
-
   @spec normalize_task_create_input(map()) :: Ecto.Changeset.t()
   defp normalize_task_create_input(params) do
-    {types, permitted_fields, required_fields} =
-      LogWatcher.parse_input_types(@task_create_input_schema)
+    fields = [
+      :task_id,
+      :session_id,
+      :session_log_path,
+      :log_prefix,
+      :task_type,
+      :gen,
+      :archived?
+    ]
 
-    {%Task{}, types}
-    |> Ecto.Changeset.cast(params, permitted_fields)
-    |> Ecto.Changeset.validate_required(required_fields)
+    Task.new()
+    |> Ecto.Changeset.cast(params, fields)
+    |> Ecto.Changeset.validate_required(Task.required_fields(fields))
     |> validate_singleton_task_log_file()
   end
 
@@ -261,29 +246,26 @@ defmodule LogWatcher.Tasks do
     |> Path.wildcard()
   end
 
-  @task_update_status_input_schema %{
-    status: [:string, required: true],
-    os_pid: :integer,
-    progress_counter: :integer,
-    progress_total: :integer,
-    progress_phase: :string,
-    last_message: :string,
-    created_at: [:naive_datetime, required: true],
-    updated_at: [:naive_datetime, required: true],
-    running_at: :naive_datetime,
-    completed_at: :naive_datetime,
-    result: :map,
-    errors: {:array, :map}
-  }
-
   @spec normalize_task_update_status_input(Task.t(), map()) :: Ecto.Changeset.t()
   defp normalize_task_update_status_input(%Task{} = task, params) do
-    {types, permitted_fields, required_fields} =
-      LogWatcher.parse_input_types(@task_update_status_input_schema)
+    fields = [
+      :status,
+      :os_pid,
+      :progress_counter,
+      :progress_total,
+      :progress_phase,
+      :last_message,
+      :created_at,
+      :updated_at,
+      :running_at,
+      :completed_at,
+      :result,
+      :errors
+    ]
 
-    {task, types}
-    |> Ecto.Changeset.cast(params, permitted_fields)
-    |> Ecto.Changeset.cast(params, required_fields)
+    task
+    |> Ecto.Changeset.cast(params, fields)
+    |> Ecto.Changeset.validate_required(params, Task.required_fields(fields))
   end
 
   @spec read_task_status(Task.t()) :: map()

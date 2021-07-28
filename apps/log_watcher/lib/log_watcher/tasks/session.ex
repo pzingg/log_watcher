@@ -4,11 +4,29 @@ defmodule LogWatcher.Tasks.Session do
   Sessions are not stored in a SQL database.
   """
 
-  defstruct [:session_id, :session_log_path, gen: -1]
+  use TypedStruct
 
-  @type t :: %__MODULE__{
-          session_id: String.t() | nil,
-          session_log_path: String.t() | nil,
-          gen: integer()
-        }
+  typedstruct do
+    @typedoc "A daptics session on disk somewhere"
+
+    plugin TypedStructEctoChangeset
+    field :session_id, String.t(), enforce: true
+    field :session_log_path, String.t(), enforce: true
+    field :gen, integer(), default: -1
+  end
+
+  def new() do
+    nil_values =
+      @enforce_keys
+      |> Enum.map(fn key -> {key, nil} end)
+    Kernel.struct(__MODULE__, nil_values)
+  end
+
+  def required_fields(fields \\ [])
+  def required_fields([]), do: @enforce_keys
+  def required_fields(fields) when is_list(fields), do: @enforce_keys -- fields
+
+  def changeset_fields(), do: Map.keys(__changeset__())
+
+  def changeset_types(), do: @changeset_fields
 end

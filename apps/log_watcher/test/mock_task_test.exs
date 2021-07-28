@@ -5,7 +5,6 @@ defmodule LogWatcher.MockTaskTest do
   alias LogWatcher.{Tasks, TaskStarter}
   alias LogWatcher.Tasks.Session
 
-  @tag :skip
   test "01 runs a Python mock test" do
     session_id = Faker.Util.format("S%4d")
     session_log_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "output"])
@@ -24,10 +23,9 @@ defmodule LogWatcher.MockTaskTest do
       TaskStarter.watch_and_run(session, task_id, task_type, task_args)
       |> wait_on_script_task(30_000)
 
-    {:ok, info} = result
+    {:ok, _info} = result
   end
 
-  @tag :skip
   test "02 runs an Rscript mock test" do
     session_id = Faker.Util.format("S%4d")
     session_log_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "output"])
@@ -46,7 +44,7 @@ defmodule LogWatcher.MockTaskTest do
       TaskStarter.watch_and_run(session, task_id, task_type, task_args, script_file: "mock_task.R")
       |> wait_on_script_task(30_000)
 
-    {:ok, info} = result
+    {:ok, _info} = result
   end
 
   test "03 runs a failing Rscript mock test" do
@@ -68,11 +66,9 @@ defmodule LogWatcher.MockTaskTest do
       TaskStarter.watch_and_run(session, task_id, task_type, task_args, script_file: "mock_task.R")
       |> wait_on_script_task(30_000)
 
-    # {:discard, {:script_terminated, _}} = result
-    {:ok, info} = result
+    {:discard, {:script_terminated, _}} = result
   end
 
-  @tag :skip
   test "04 enqueues an Oban job" do
     session_id = Faker.Util.format("S%4d")
     session_log_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "output"])
@@ -101,7 +97,6 @@ defmodule LogWatcher.MockTaskTest do
     assert_enqueued(worker: LogWatcher.TaskStarter, args: match_args)
   end
 
-  @tag :skip
   test "05 runs a mock test under Oban" do
     session_id = Faker.Util.format("S%4d")
     session_log_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "output"])
