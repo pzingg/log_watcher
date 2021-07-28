@@ -3,11 +3,27 @@
 source("json_logging.R")
 source("script_startup.R")
 
+# These functions are defined in json_logging.R:
+# init_logging
+# set_script_status
+# format_utcnow
+# arg_file_name
+# log_file_name
+# result_file_name
+# log_res
+# maybe_log_error
+# read_arg_file
+# write_result_file
+# write_start_file
+
+# These functions are defined in script_startup.R:
+# script_startup
+
 setup_logging <- function(args) {
   log_file <- log_file_name(args$task_id, args$task_type, args$gen)
-  log_path <- file.path(args$log_path, log_file)
-  initLogging(log_path)
-  cat(paste0("logging setup done, will append to ", log_path, "\n"))
+  log_file_path <- file.path(args$log_path, log_file)
+  init_logging(log_file_path)
+  cat(paste0("logging setup done, will append to ", log_file_path, "\n"))
 }
 
 run_job <- function(args) {
@@ -28,7 +44,7 @@ run_job <- function(args) {
 
   set_script_status("created")
   message <- paste0("Task ", task_id, " created")
-  flog.info(message)
+  futile.logger::flog.info(message)
   cat("log file created\n")
 
   arg_file <- arg_file_name(task_id, task_type, gen)
@@ -36,7 +52,7 @@ run_job <- function(args) {
   res <- read_arg_file(arg_path)
   set_script_status(res$status)
 
-  flog.info(res$message)
+  futile.logger::flog.info(res$message)
   cat("read arg file\n")
 
   num_lines <- res$args$num_lines
@@ -51,7 +67,7 @@ run_job <- function(args) {
     result <- res$result
     errors <- res$errors
     res$result <- NULL
-    res$errors <- NULL
+    res$errors <- list()
 
     if (is.null(started_at)) {
       started_at <- format_utcnow()
@@ -70,13 +86,13 @@ run_job <- function(args) {
         result_info <- list(
           succeeded = TRUE,
           file = result_file,
-          errors = errors
+          errors = make_error_list(errors)
         )
       } else {
         result_info <- list(
           succeeded = FALSE,
           file = result_file,
-          errors = errors
+          errors = make_error_list(errors)
         )
       }
       res$completed_at <- format_utcnow()
@@ -142,11 +158,11 @@ mock_status <- function(task_id, line_no, num_lines, error, cancel) {
   } else {
     if (cancel) {
       status <- "canceled"
-      errors <- list(list(message = paste0("canceled on line ", line_no)))
+      errors <- paste0("canceled on line ", line_no)
     } else {
       status <- "completed"
       if (error) {
-        errors <- list(list(message = paste0("error on line ", line_no)))
+        errors <- paste0("error on line ", line_no)
       } else {
         result <- list(params = list(list(a = 2), list(b = line_no)))
       }
@@ -174,11 +190,9 @@ mock_status <- function(task_id, line_no, num_lines, error, cancel) {
   )
 }
 
-
 # Execution starts here
 
 args <- scriptStartup()
 setup_logging(args)
-# res <- run_job(args)
 res <- try_capture_stack(run_job(args))
-log_error(res, args)
+maybe_log_error(res, args)

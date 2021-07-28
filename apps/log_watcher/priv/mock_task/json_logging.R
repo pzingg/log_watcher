@@ -1,6 +1,8 @@
 library(futile.logger, quietly = TRUE)
 library(jsonlite, quietly = TRUE)
 
+## JSON logging for futile.logger
+
 #' Custom API JSON layout for use with \code{futile.logger}
 #'
 #' Reads session and command information from R runtime \code{options},
@@ -26,12 +28,12 @@ library(jsonlite, quietly = TRUE)
 #'     message:       the readable error message
 #'     category:      "validation" or "execution"
 #'     system:        true if this was an internal system error
-#'     fatal:         true if thiw was a fatal error
-jsonLayout <- function(level, msg, id = "", ...) {
+#'     fatal:         true if this was a fatal error
+json_task_layout <- function(level, msg, id = "", ...) {
   if (is(msg, "condition")) {
     msg <- msg$message
   }
-  outputList <- list(
+  message_data <- list(
     session_id = getOption("daptics_session_id"),
     session_log_path = getOption("daptics_session_log_path"),
     task_id = getOption("daptics_task_id"),
@@ -44,7 +46,7 @@ jsonLayout <- function(level, msg, id = "", ...) {
     message = paste(msg, collapse = "\n"),
     additional = ...
   )
-  paste0(jsonlite::toJSON(outputList,
+  paste0(jsonlite::toJSON(message_data,
     Date = "ISO8601",
     POSIXt = "ISO8601",
     factor = "string",
@@ -55,21 +57,23 @@ jsonLayout <- function(level, msg, id = "", ...) {
   ), "\n")
 }
 
-format_utcnow <- function() {
-  format(Sys.time(), "%Y-%m-%dT%H:%M:%S")
-}
-
 # Initialize futile.logger
-initLogging <- function(logFilePath, level = futile.logger::INFO) {
-  force(logFilePath)
+init_logging <- function(log_file_path, level = futile.logger::INFO) {
+  force(log_file_path)
 
   futile.logger::flog.threshold(level)
-  futile.logger::flog.layout(jsonLayout)
-  futile.logger::flog.appender(futile.logger::appender.file(logFilePath))
+  futile.logger::flog.layout(json_task_layout)
+  futile.logger::flog.appender(futile.logger::appender.file(log_file_path))
 }
 
 set_script_status <- function(status) {
   options(daptics_script_status = status)
+}
+
+## Capture traceback and other formatting
+
+format_utcnow <- function() {
+  format(Sys.time(), "%Y-%m-%dT%H:%M:%S")
 }
 
 # borrowed from
@@ -104,25 +108,60 @@ get_traceback <- function(err) {
   }
 }
 
+make_error_list <- function(errors, system = TRUE, fatal = TRUE) {
+  category = getOption("daptics_script_status", default = "running")
+  lapply(errors, function(e) {
+    list(message = e, category = category, system = system, fatal = fatal)
+  })
+}
+
+## Log file name functions
+
+make_log_prefix <- function(task_id, task_type, gen) {
+  gen_str <- paste0("0000", gen)
+  gen_str <- substring(gen_str, nchar(gen_str) - 3)
+  paste0(task_id, "-", task_type, "-", gen_str)
+}
+
+log_file_name <- function(task_id, task_type, gen) {
+  paste0(make_log_prefix(task_id, task_type, gen), "-log.jsonl")
+}
+
+arg_file_name <- function(task_id, task_type, gen) {
+  paste0(make_log_prefix(task_id, task_type, gen), "-arg.json")
+}
+
+start_file_name <- function(task_id, task_type, gen) {
+  paste0(make_log_prefix(task_id, task_type, gen), "-start.json")
+}
+
+result_file_name <- function(task_id, task_type, gen) {
+  paste0(make_log_prefix(task_id, task_type, gen), "-result.json")
+}
+
+## Main logging functions
+
 log_res <- function(message, res, level = "INFO") {
-  res$status <- NULL
-  res$message <- NULL
-  logger_args <- c(message, res)
   log_fn <- switch(level,
     INFO = futile.logger::flog.info,
     ERROR = futile.logger::flog.error,
     WARN = futile.logger::flog.warn,
+    FATAL = futile.logger::flog.fatal,
     DEBUG = futile.logger::flog.debug,
+    TRACE = futile.logger::flog.trace,
     futile.logger::flog.info
   )
-  do.call(futile.logger::flog.info, logger_args)
+  res$status <- NULL
+  res$message <- NULL
+  logger_args <- c(message, res)
+  do.call(log_fn, logger_args)
 }
 
-log_error <- function(res, args) {
+maybe_log_error <- function(res, args) {
   # If there is an error, class(res) <- c("simpleError", "error", "condition")
   if (is(res, "error")) {
     trace <- get_traceback(res)
-    cat(paste0("log_error: ", trace$error, "\n"))
+    cat(paste0("maybe_log_error: ", trace$error, "\n"))
 
     result_file <- result_file_name(args$task_id, args$task_type, args$gen)
     result_path <- file.path(args$log_path, result_file)
@@ -130,9 +169,13 @@ log_error <- function(res, args) {
     result_info <- list(
       succeeded = FALSE,
       file = result_file,
-      errors = list(list(message = trace$error))
+      errors = make_error_list(trace$error)
     )
-    info <- list(result = result_info, call = trace$call, traceback = trace$traceback)
+    info <- list(
+      result = result_info, 
+      call = trace$call, 
+      traceback = trace$traceback
+    )
     write_result_file(result_path, info, NULL)
 
     set_script_status("completed")
@@ -146,6 +189,36 @@ log_error <- function(res, args) {
   } else {
     res
   }
+}
+
+read_arg_file <- function(arg_path) {
+  args <- jsonlite::read_json(arg_path, simplifyVector = TRUE)
+  task_id <- args$task_id
+
+  opt_session_id <- getOption("daptics_session_id")
+  stopifnot(!is.null(args$session_id))
+  stopifnot(identical(args$session_id, opt_session_id))
+  opt_task_id <- getOption("daptics_task_id")
+  stopifnot(!is.null(task_id))
+  stopifnot(identical(task_id, opt_task_id))
+  opt_task_type <- getOption("daptics_task_type")
+  stopifnot(!is.null(args$task_type))
+  stopifnot(identical(args$task_type, opt_task_type))
+  opt_gen <- getOption("daptics_task_gen")
+  stopifnot(!is.null(args$gen))
+  stopifnot(identical(args$gen, opt_gen))
+
+  args["session_id"] <- NULL
+  args["session_log_path"] <- NULL
+  args["task_id"] <- NULL
+  args["task_type"] <- NULL
+  args["gen"] <- NULL
+
+  list(
+    status = "input",
+    message = paste0("Task ", task_id, " parsed ", length(args), " args"),
+    args = args
+  )
 }
 
 write_start_file <- function(path, info) {

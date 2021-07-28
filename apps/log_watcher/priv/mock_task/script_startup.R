@@ -1,8 +1,6 @@
-library(futile.logger, quietly = TRUE)
 library(jsonlite, quietly = TRUE)
 library(argparser, quietly = TRUE)
 
-source("json_logging.R")
 
 #' Startup procedure for Rscript-based API
 #'
@@ -150,56 +148,4 @@ scriptStartup <- function() {
   }
   options(ow)
   TRUE
-}
-
-make_log_prefix <- function(task_id, task_type, gen) {
-  gen_str <- paste0("0000", gen)
-  gen_str <- substring(gen_str, nchar(gen_str) - 3)
-  paste0(task_id, "-", task_type, "-", gen_str)
-}
-
-log_file_name <- function(task_id, task_type, gen) {
-  paste0(make_log_prefix(task_id, task_type, gen), "-log.jsonl")
-}
-
-arg_file_name <- function(task_id, task_type, gen) {
-  paste0(make_log_prefix(task_id, task_type, gen), "-arg.json")
-}
-
-start_file_name <- function(task_id, task_type, gen) {
-  paste0(make_log_prefix(task_id, task_type, gen), "-start.json")
-}
-
-result_file_name <- function(task_id, task_type, gen) {
-  paste0(make_log_prefix(task_id, task_type, gen), "-result.json")
-}
-
-read_arg_file <- function(arg_path) {
-  args <- jsonlite::read_json(arg_path, simplifyVector = TRUE)
-  task_id <- args$task_id
-
-  opt_session_id <- getOption("daptics_session_id")
-  stopifnot(!is.null(args$session_id))
-  stopifnot(identical(args$session_id, opt_session_id))
-  opt_task_id <- getOption("daptics_task_id")
-  stopifnot(!is.null(task_id))
-  stopifnot(identical(task_id, opt_task_id))
-  opt_task_type <- getOption("daptics_task_type")
-  stopifnot(!is.null(args$task_type))
-  stopifnot(identical(args$task_type, opt_task_type))
-  opt_gen <- getOption("daptics_task_gen")
-  stopifnot(!is.null(args$gen))
-  stopifnot(identical(args$gen, opt_gen))
-
-  args["session_id"] <- NULL
-  args["session_log_path"] <- NULL
-  args["task_id"] <- NULL
-  args["task_type"] <- NULL
-  args["gen"] <- NULL
-
-  list(
-    status = "input",
-    message = paste0("Task ", task_id, " parsed ", length(args), " args"),
-    args = args
-  )
 }
