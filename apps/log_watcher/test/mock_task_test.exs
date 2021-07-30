@@ -8,7 +8,9 @@ defmodule LogWatcher.MockTaskTest do
   test "01 runs a Python mock task" do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       fake_task_args()
+
     archive_existing_tasks(session)
+
     result =
       TaskStarter.watch_and_run(session, task_id, task_type, task_args)
       |> wait_on_script_task(30_000)
@@ -19,7 +21,9 @@ defmodule LogWatcher.MockTaskTest do
   test "02 runs an Rscript mock task" do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       fake_task_args()
+
     archive_existing_tasks(session)
+
     result =
       TaskStarter.watch_and_run(session, task_id, task_type, task_args, script_file: "mock_task.R")
       |> wait_on_script_task(30_000)
@@ -30,7 +34,9 @@ defmodule LogWatcher.MockTaskTest do
   test "03 runs a failing Rscript mock task" do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       fake_task_args(error: true)
+
     archive_existing_tasks(session)
+
     result =
       TaskStarter.watch_and_run(session, task_id, task_type, task_args, script_file: "mock_task.R")
       |> wait_on_script_task(30_000)
@@ -38,10 +44,12 @@ defmodule LogWatcher.MockTaskTest do
     {:discard, {:script_terminated, _}} = result
   end
 
-  test "04 finds an Rscript mock task" do
+  test "04 finds the running task" do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       fake_task_args()
+
     archive_existing_tasks(session)
+
     {:ok, %{script_task: task}} =
       TaskStarter.watch_and_run(session, task_id, task_type, task_args, script_file: "mock_task.R")
 
@@ -63,13 +71,15 @@ defmodule LogWatcher.MockTaskTest do
     :ok = Tasks.archive_task!(session, task_id)
 
     task_list = Tasks.list_tasks(session)
-    assert Enum.count(task_list) == 0
+    assert Enum.empty?(task_list)
   end
 
   test "05 enqueues an Oban job" do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       fake_task_args(true)
+
     archive_existing_tasks(session)
+
     {:ok, %Oban.Job{id: _job_id}} = TaskStarter.work(session, task_id, task_type, task_args)
 
     match_args = %{
@@ -88,6 +98,7 @@ defmodule LogWatcher.MockTaskTest do
   test "06 runs a mock task under Oban" do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       fake_task_args(true)
+
     archive_existing_tasks(session)
 
     args = %{
@@ -98,6 +109,7 @@ defmodule LogWatcher.MockTaskTest do
       task_type: task_type,
       task_args: task_args
     }
+
     {:ok, result} = perform_job(LogWatcher.TaskStarter, args)
     assert result.task_id == task_id
     assert String.contains?(result.message, "running on line")
@@ -159,6 +171,7 @@ defmodule LogWatcher.MockTaskTest do
     session_log_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "output"])
     gen = :random.uniform(10) - 1
     {:ok, %Session{} = session} = Tasks.create_session(session_id, session_log_path, gen)
+
     %{
       session: session,
       task_id: Faker.Util.format("T%4d"),

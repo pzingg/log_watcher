@@ -121,11 +121,14 @@ defmodule LogWatcher.Tasks do
   ### Task files on disk
 
   @spec list_task_log_files(Session.t(), boolean()) :: [String.t()]
-  def list_task_log_files(%Session{session_id: session_id, session_log_path: session_log_path}, include_archived \\ false) do
-    Path.join(session_log_path, all_task_log_file_glob(include_archived))
-    |> Path.wildcard()
+  def list_task_log_files(
+        %Session{session_id: session_id, session_log_path: session_log_path},
+        include_archived \\ false
+      ) do
+    log_files_for_session(session_log_path, include_archived)
     |> Enum.map(fn log_file_path ->
       params = parse_log_file_name(session_id, log_file_path)
+
       %{
         log_file_path: params["log_file_path"],
         log_file_name: params["log_file_name"],
@@ -142,15 +145,7 @@ defmodule LogWatcher.Tasks do
         %Session{session_id: session_id, session_log_path: session_log_path},
         include_archived \\ false
       ) do
-    glob =
-      if include_archived do
-        Path.join(session_log_path, "*-log.json?")
-      else
-        Path.join(session_log_path, "*-log.jsonl")
-      end
-
-    glob
-    |> Path.wildcard()
+    log_files_for_session(session_log_path, include_archived)
     |> Enum.map(&create_task_from_file!(session_id, &1))
   end
 
@@ -169,6 +164,7 @@ defmodule LogWatcher.Tasks do
   def archive_task!(%Session{} = session, task_id) do
     file_results = archive_task(session, task_id)
     count = Enum.count(file_results)
+
     if count > 1 do
       {:error, "#{count} log files for #{task_id} were archived"}
     else
@@ -224,9 +220,17 @@ defmodule LogWatcher.Tasks do
     |> Path.wildcard()
   end
 
-  defp all_task_log_file_glob(true), do: "*-*-log.json?"
-  defp all_task_log_file_glob(_), do: "*-*-log.jsonl"
+  @spec log_files_for_task(String.t(), boolean()) :: [String.t()]
+  defp log_files_for_session(session_log_path, include_archived \\ false) do
+    Path.join(session_log_path, all_task_log_file_glob(include_archived))
+    |> Path.wildcard()
+  end
 
+  @spec all_task_log_file_glob(boolean()) :: String.t()
+  defp all_task_log_file_glob(true), do: "*-log.json?"
+  defp all_task_log_file_glob(_), do: "*-log.jsonl"
+
+  @spec parse_log_file_name(String.t(), String.t()) :: map()
   defp parse_log_file_name(session_id, log_file_path) do
     session_log_path = Path.dirname(log_file_path)
     log_file_name = Path.basename(log_file_path)
