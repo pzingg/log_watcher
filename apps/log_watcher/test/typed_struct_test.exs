@@ -12,7 +12,7 @@ defmodule LogWatcher.TypedStructTest do
 
   test "02 session ecto types" do
     assert Enum.sort(Session.required_fields()) == [:session_id, :session_log_path]
-    assert Enum.sort(Session.changeset_fields()) == [:gen, :session_id, :session_log_path]
+    assert Enum.sort(Session.all_fields()) == [:gen, :session_id, :session_log_path]
     assert Enum.sort(Session.changeset_types()) == [
       {:gen, :integer},
       {:session_id, :string},
@@ -38,9 +38,9 @@ defmodule LogWatcher.TypedStructTest do
       :status,
       :task_id,
       :task_type,
-      :updated_at,
+      :updated_at
     ]
-    assert Enum.sort(Task.changeset_fields()) == [
+    assert Enum.sort(Task.all_fields()) == [
       :archived?,
       :completed_at,
       :created_at,
@@ -59,7 +59,7 @@ defmodule LogWatcher.TypedStructTest do
       :status,
       :task_id,
       :task_type,
-      :updated_at,
+      :updated_at
     ]
     assert Enum.sort(Task.changeset_types()) == [
       {:archived?, :boolean},
@@ -80,7 +80,7 @@ defmodule LogWatcher.TypedStructTest do
       {:status, :string},
       {:task_id, :string},
       {:task_type, :string},
-      {:updated_at, :naive_datetime},
+      {:updated_at, :naive_datetime}
     ]
   end
 end

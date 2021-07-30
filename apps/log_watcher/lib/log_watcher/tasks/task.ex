@@ -42,7 +42,7 @@ defmodule LogWatcher.Tasks.Task do
   def required_fields([]), do: @enforce_keys
   def required_fields(fields) when is_list(fields), do: @enforce_keys -- fields
 
-  def changeset_fields(), do: Map.keys(__changeset__())
+  def all_fields(), do: Keyword.keys(@changeset_fields)
 
   def changeset_types(), do: @changeset_fields
 
