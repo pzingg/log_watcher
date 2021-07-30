@@ -5,20 +5,10 @@ defmodule LogWatcher.MockTaskTest do
   alias LogWatcher.{Tasks, TaskStarter}
   alias LogWatcher.Tasks.Session
 
-  test "01 runs a Python mock test" do
-    session_id = Faker.Util.format("S%4d")
-    session_log_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "output"])
-    gen = :random.uniform(10) - 1
-    task_id = Faker.Util.format("T%4d")
-    task_type = Faker.Util.pick(["create", "update", "generate", "anayltics"])
-
-    task_args = %{
-      num_lines: :random.uniform(6) + 6,
-      space_type: Faker.Util.pick(["mixture", "factorial", "sparsefactorial"])
-    }
-
-    {:ok, %Session{} = session} = Tasks.create_session(session_id, session_log_path, gen)
-
+  test "01 runs a Python mock task" do
+    %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
+      fake_task_args()
+    archive_existing_tasks(session)
     result =
       TaskStarter.watch_and_run(session, task_id, task_type, task_args)
       |> wait_on_script_task(30_000)
@@ -26,20 +16,10 @@ defmodule LogWatcher.MockTaskTest do
     {:ok, _info} = result
   end
 
-  test "02 runs an Rscript mock test" do
-    session_id = Faker.Util.format("S%4d")
-    session_log_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "output"])
-    gen = :random.uniform(10) - 1
-    task_id = Faker.Util.format("T%4d")
-    task_type = Faker.Util.pick(["create", "update", "generate", "anayltics"])
-
-    task_args = %{
-      num_lines: :random.uniform(6) + 6,
-      space_type: Faker.Util.pick(["mixture", "factorial", "sparsefactorial"])
-    }
-
-    {:ok, %Session{} = session} = Tasks.create_session(session_id, session_log_path, gen)
-
+  test "02 runs an Rscript mock task" do
+    %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
+      fake_task_args()
+    archive_existing_tasks(session)
     result =
       TaskStarter.watch_and_run(session, task_id, task_type, task_args, script_file: "mock_task.R")
       |> wait_on_script_task(30_000)
@@ -47,21 +27,10 @@ defmodule LogWatcher.MockTaskTest do
     {:ok, _info} = result
   end
 
-  test "03 runs a failing Rscript mock test" do
-    session_id = Faker.Util.format("S%4d")
-    session_log_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "output"])
-    gen = :random.uniform(10) - 1
-    task_id = Faker.Util.format("T%4d")
-    task_type = Faker.Util.pick(["create", "update", "generate", "anayltics"])
-
-    task_args = %{
-      error: true,
-      num_lines: :random.uniform(6) + 6,
-      space_type: Faker.Util.pick(["mixture", "factorial", "sparsefactorial"])
-    }
-
-    {:ok, %Session{} = session} = Tasks.create_session(session_id, session_log_path, gen)
-
+  test "03 runs a failing Rscript mock task" do
+    %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
+      fake_task_args(error: true)
+    archive_existing_tasks(session)
     result =
       TaskStarter.watch_and_run(session, task_id, task_type, task_args, script_file: "mock_task.R")
       |> wait_on_script_task(30_000)
@@ -69,25 +38,44 @@ defmodule LogWatcher.MockTaskTest do
     {:discard, {:script_terminated, _}} = result
   end
 
-  test "04 enqueues an Oban job" do
-    session_id = Faker.Util.format("S%4d")
-    session_log_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "output"])
-    gen = :random.uniform(10) - 1
-    task_id = Faker.Util.format("T%4d")
-    task_type = Faker.Util.pick(["create", "update", "generate", "anayltics"])
+  test "04 finds an Rscript mock task" do
+    %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
+      fake_task_args()
+    archive_existing_tasks(session)
+    {:ok, %{script_task: task}} =
+      TaskStarter.watch_and_run(session, task_id, task_type, task_args, script_file: "mock_task.R")
 
-    task_args = %{
-      num_lines: :random.uniform(6) + 6,
-      space_type: Faker.Util.pick(["mixture", "factorial", "sparsefactorial"])
-    }
+    task_list = Tasks.list_tasks(session)
+    assert Enum.count(task_list) == 1
+    [found_task] = task_list
+    assert found_task.task_id == task_id
+    assert found_task.task_type == task_type
+    assert found_task.gen == session.gen
+    assert found_task.status == "running"
 
-    {:ok, session} = Tasks.create_session(session_id, session_log_path, gen)
+    wait_on_script_task(task, 30_000)
+
+    task_list = Tasks.list_tasks(session)
+    assert Enum.count(task_list) == 1
+    [found_task] = task_list
+    assert found_task.status == "completed"
+
+    :ok = Tasks.archive_task!(session, task_id)
+
+    task_list = Tasks.list_tasks(session)
+    assert Enum.count(task_list) == 0
+  end
+
+  test "05 enqueues an Oban job" do
+    %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
+      fake_task_args(true)
+    archive_existing_tasks(session)
     {:ok, %Oban.Job{id: _job_id}} = TaskStarter.work(session, task_id, task_type, task_args)
 
     match_args = %{
-      session_id: session_id,
-      session_log_path: session_log_path,
-      gen: gen,
+      session_id: session.session_id,
+      session_log_path: session.session_log_path,
+      gen: session.gen,
       task_id: task_id,
       task_type: task_type,
       task_args: task_args
@@ -97,27 +85,19 @@ defmodule LogWatcher.MockTaskTest do
     assert_enqueued(worker: LogWatcher.TaskStarter, args: match_args)
   end
 
-  test "05 runs a mock test under Oban" do
-    session_id = Faker.Util.format("S%4d")
-    session_log_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "output"])
-    gen = :random.uniform(10) - 1
-    task_id = Faker.Util.format("T%4d")
-    task_type = Faker.Util.pick(["create", "update", "generate", "anayltics"])
-
-    task_args = %{
-      num_lines: :random.uniform(6) + 6,
-      space_type: Faker.Util.pick(["mixture", "factorial", "sparsefactorial"])
-    }
+  test "06 runs a mock task under Oban" do
+    %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
+      fake_task_args(true)
+    archive_existing_tasks(session)
 
     args = %{
-      session_id: session_id,
-      session_log_path: session_log_path,
-      gen: gen,
+      session_id: session.session_id,
+      session_log_path: session.session_log_path,
+      gen: session.gen,
       task_id: task_id,
       task_type: task_type,
       task_args: task_args
     }
-
     {:ok, result} = perform_job(LogWatcher.TaskStarter, args)
     assert result.task_id == task_id
     assert String.contains?(result.message, "running on line")
@@ -166,5 +146,28 @@ defmodule LogWatcher.MockTaskTest do
     else
       :ok
     end
+  end
+
+  defp archive_existing_tasks(session) do
+    Tasks.list_task_log_files(session)
+    |> Enum.filter(fn %{archived?: archived} -> !archived end)
+    |> Enum.map(fn %{task_id: task_id} -> Tasks.archive_task(session, task_id) end)
+  end
+
+  defp fake_task_args(opts \\ []) do
+    session_id = Faker.Util.format("S%4d")
+    session_log_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "output"])
+    gen = :random.uniform(10) - 1
+    {:ok, %Session{} = session} = Tasks.create_session(session_id, session_log_path, gen)
+    %{
+      session: session,
+      task_id: Faker.Util.format("T%4d"),
+      task_type: Faker.Util.pick(["create", "update", "generate", "analytics"]),
+      task_args: %{
+        error: Keyword.get(opts, :error, false),
+        num_lines: :random.uniform(6) + 6,
+        space_type: Faker.Util.pick(["mixture", "factorial", "sparsefactorial"])
+      }
+    }
   end
 end

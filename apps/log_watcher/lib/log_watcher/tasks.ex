@@ -78,7 +78,7 @@ defmodule LogWatcher.Tasks do
   @spec create_session!(String.t(), String.t(), integer()) :: Session.t()
   def create_session!(session_id, session_log_path, gen) do
     create_session(session_id, session_log_path, gen)
-    |> LogWatcher.raise_input_error("Errors reading session", :session_id)
+    |> LogWatcher.maybe_raise_input_error("Errors reading session", :session_id)
   end
 
   @spec create_session(String.t(), String.t(), integer()) ::
@@ -120,6 +120,23 @@ defmodule LogWatcher.Tasks do
 
   ### Task files on disk
 
+  @spec list_task_log_files(Session.t(), boolean()) :: [String.t()]
+  def list_task_log_files(%Session{session_id: session_id, session_log_path: session_log_path}, include_archived \\ false) do
+    Path.join(session_log_path, all_task_log_file_glob(include_archived))
+    |> Path.wildcard()
+    |> Enum.map(fn log_file_path ->
+      params = parse_log_file_name(session_id, log_file_path)
+      %{
+        log_file_path: params["log_file_path"],
+        log_file_name: params["log_file_name"],
+        task_id: params["task_id"],
+        task_type: params["task_type"],
+        gen: params["gen"],
+        archived?: params["archived?"]
+      }
+    end)
+  end
+
   @spec list_tasks(Session.t(), boolean()) :: [Task.t()]
   def list_tasks(
         %Session{session_id: session_id, session_log_path: session_log_path},
@@ -139,7 +156,7 @@ defmodule LogWatcher.Tasks do
 
   @spec get_task(Session.t(), String.t()) :: Task.t() | nil
   def get_task(%Session{session_id: session_id, session_log_path: session_log_path}, task_id) do
-    case list_tag_log_files(session_log_path, task_id) do
+    case log_files_for_task(session_log_path, task_id) do
       [] ->
         nil
 
@@ -148,21 +165,33 @@ defmodule LogWatcher.Tasks do
     end
   end
 
+  @spec archive_task!(Session.t(), String.t()) :: :ok | {:error, term()}
+  def archive_task!(%Session{} = session, task_id) do
+    file_results = archive_task(session, task_id)
+    count = Enum.count(file_results)
+    if count > 1 do
+      {:error, "#{count} log files for #{task_id} were archived"}
+    else
+      [{_task_id_or_file_name, result}] = file_results
+      result
+    end
+  end
+
   @spec archive_task(Session.t(), String.t()) :: [{String.t(), :ok | {:error, term()}}]
   def archive_task(%Session{session_log_path: session_log_path}, task_id) do
-    log_files = list_tag_log_files(session_log_path, task_id)
+    log_files = log_files_for_task(session_log_path, task_id)
 
     if Enum.empty?(log_files) do
       [{task_id, {:error, :not_found}}]
     else
       Enum.map(log_files, fn path ->
-        file = Path.basename(path)
+        file_name = Path.basename(path)
 
-        if String.ends_with?(file, "jsonx") do
-          {file, {:error, :already_archived}}
+        if String.ends_with?(file_name, "jsonx") do
+          {file_name, {:error, :already_archived}}
         else
           archived_path = String.replace_trailing(path, "jsonl", "jsonx")
-          {file, File.rename(path, archived_path)}
+          {file_name, File.rename(path, archived_path)}
         end
       end)
     end
@@ -171,12 +200,34 @@ defmodule LogWatcher.Tasks do
   @spec create_task_from_file!(String.t(), String.t()) :: Task.t()
   def create_task_from_file!(session_id, log_file_path) do
     create_task_from_file(session_id, log_file_path)
-    |> LogWatcher.raise_input_error("Errors reading task", :task_id)
+    |> LogWatcher.maybe_raise_input_error("Errors reading task", :task_id)
   end
 
   @spec create_task_from_file(String.t(), String.t()) ::
           {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def create_task_from_file(session_id, log_file_path) do
+    # Schemaless changesets
+    with create_params <-
+           parse_log_file_name(session_id, log_file_path),
+         {:ok, task} <-
+           normalize_task_create_input(create_params)
+           |> Ecto.Changeset.apply_action(:insert),
+         status_params <- read_task_status(task) do
+      normalize_task_update_status_input(task, status_params)
+      |> Ecto.Changeset.apply_action(:update)
+    end
+  end
+
+  @spec log_files_for_task(String.t(), String.t()) :: [String.t()]
+  defp log_files_for_task(session_log_path, task_id) do
+    Path.join(session_log_path, Task.log_file_glob(task_id))
+    |> Path.wildcard()
+  end
+
+  defp all_task_log_file_glob(true), do: "*-*-log.json?"
+  defp all_task_log_file_glob(_), do: "*-*-log.jsonl"
+
+  defp parse_log_file_name(session_id, log_file_path) do
     session_log_path = Path.dirname(log_file_path)
     log_file_name = Path.basename(log_file_path)
     is_archived = String.ends_with?(log_file_name, ".jsonx")
@@ -185,22 +236,17 @@ defmodule LogWatcher.Tasks do
     with session_and_archive_params <- %{
            "session_id" => session_id,
            "session_log_path" => session_log_path,
+           "log_file_name" => log_file_name,
+           "log_file_path" => log_file_path,
            "log_prefix" => log_prefix,
            "archived?" => is_archived
          },
-         create_params <-
+         file_name_params <-
            Regex.named_captures(
              ~r/^(?<task_id>[^-]+)-(?<task_type>[^-]+)-(?<gen>\d+)/,
              log_file_name
-           )
-           |> Map.merge(session_and_archive_params),
-         # Schemaless changesets
-         {:ok, task} <-
-           normalize_task_create_input(create_params)
-           |> Ecto.Changeset.apply_action(:insert),
-         status_params <- read_task_status(task) do
-      normalize_task_update_status_input(task, status_params)
-      |> Ecto.Changeset.apply_action(:update)
+           ) do
+      Map.merge(file_name_params, session_and_archive_params)
     end
   end
 
@@ -226,7 +272,7 @@ defmodule LogWatcher.Tasks do
   defp validate_singleton_task_log_file(changeset) do
     session_log_path = Ecto.Changeset.get_change(changeset, :session_log_path)
     task_id = Ecto.Changeset.get_change(changeset, :task_id)
-    count = Enum.count(list_tag_log_files(session_log_path, task_id))
+    count = Enum.count(log_files_for_task(session_log_path, task_id))
 
     if count == 1 do
       changeset
@@ -238,12 +284,6 @@ defmodule LogWatcher.Tasks do
         count: count
       )
     end
-  end
-
-  @spec list_tag_log_files(String.t(), String.t()) :: [String.t()]
-  defp list_tag_log_files(session_log_path, task_id) do
-    Path.join(session_log_path, Task.log_file_glob(task_id))
-    |> Path.wildcard()
   end
 
   @spec normalize_task_update_status_input(Task.t(), map()) :: Ecto.Changeset.t()
@@ -265,7 +305,7 @@ defmodule LogWatcher.Tasks do
 
     task
     |> Ecto.Changeset.cast(params, fields)
-    |> Ecto.Changeset.validate_required(params, Task.required_fields(fields))
+    |> Ecto.Changeset.validate_required(Task.required_fields(fields))
   end
 
   @spec read_task_status(Task.t()) :: map()

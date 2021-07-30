@@ -177,6 +177,8 @@ defmodule LogWatcher.TaskStarter do
           gen: gen
         } = start_args
       ) do
+    Logger.info("job #{task_id}: start_args #{inspect(start_args)}")
+
     basic_args = [
       "--log-path",
       session_log_path,

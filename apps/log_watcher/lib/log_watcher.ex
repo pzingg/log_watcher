@@ -20,8 +20,8 @@ defmodule LogWatcher do
 
   @type normalized_result() :: {:ok, struct()} | {:error, Ecto.Changeset.t()}
 
-  @spec raise_input_error(normalized_result(), String.t(), atom()) :: struct()
-  def raise_input_error({:error, changeset}, label, id_field) do
+  @spec maybe_raise_input_error(normalized_result(), String.t(), atom()) :: struct()
+  def maybe_raise_input_error({:error, changeset}, label, id_field) do
     id_value = Ecto.Changeset.get_field(changeset, id_field)
     errors = input_error_messages(changeset) |> Enum.join(" ")
 
@@ -36,7 +36,7 @@ defmodule LogWatcher do
     InputError.exception(message)
   end
 
-  def raise_input_error({:ok, data}, _label, _id_field), do: data
+  def maybe_raise_input_error({:ok, data}, _label, _id_field), do: data
 
   @spec input_error_messages(Ecto.Changeset.t()) :: [String.t()]
   def input_error_messages(changeset) do

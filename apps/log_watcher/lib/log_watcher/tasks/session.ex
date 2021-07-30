@@ -24,7 +24,9 @@ defmodule LogWatcher.Tasks.Session do
 
   def required_fields(fields \\ [])
   def required_fields([]), do: @enforce_keys
-  def required_fields(fields) when is_list(fields), do: @enforce_keys -- fields
+  def required_fields(fields) when is_list(fields) do
+    @enforce_keys -- (@enforce_keys -- fields)
+  end
 
   def all_fields(), do: Keyword.keys(@changeset_fields)
 

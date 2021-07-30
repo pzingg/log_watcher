@@ -39,7 +39,7 @@ run_job <- function(args) {
   write_start <- FALSE
   write_result <- FALSE
 
-  cat(paste0("run_job cancel ", cancel, " error ", error, "\n"))
+  cat(paste0("run_job: cancel ", cancel, " error ", error, "\n"))
   cat("writing first log message\n")
 
   set_script_status("created")
