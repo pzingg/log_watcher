@@ -18,7 +18,6 @@ defmodule LogWatcher.MockTaskTest do
     {:ok, _info} = result
   end
 
-  @tag :skip
   test "02 runs an Rscript mock task", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       fake_task_args(context, script_file: "mock_task.R")
@@ -32,10 +31,9 @@ defmodule LogWatcher.MockTaskTest do
     {:ok, _info} = result
   end
 
-  @tag :skip
-  test "03 runs a failing Rscript mock task", context do
+  test "03 runs an Rscript mock task that fails in validating phase", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
-      fake_task_args(context, script_file: "mock_task.R", error: true)
+      fake_task_args(context, script_file: "mock_task.R", error: "validating")
 
     archive_existing_tasks(session)
 
@@ -46,8 +44,20 @@ defmodule LogWatcher.MockTaskTest do
     {:discard, {:script_terminated, _}} = result
   end
 
-  @tag :skip
-  test "04 finds the running task", context do
+  test "04 runs an Rscript mock task that fails in running phase", context do
+    %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
+      fake_task_args(context, script_file: "mock_task.R", error: "running")
+
+    archive_existing_tasks(session)
+
+    result =
+      TaskStarter.watch_and_run(session, task_id, task_type, task_args)
+      |> wait_on_script_task(30_000)
+
+    {:ok, _info} = result
+  end
+
+  test "05 finds the running task", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       fake_task_args(context, script_file: "mock_task.R")
 
@@ -77,8 +87,7 @@ defmodule LogWatcher.MockTaskTest do
     assert Enum.empty?(task_list)
   end
 
-  @tag :skip
-  test "05 enqueues an Oban job", context do
+  test "06 enqueues an Oban job", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       fake_task_args(context, script_file: "mock_task.R")
 
@@ -101,8 +110,7 @@ defmodule LogWatcher.MockTaskTest do
     assert_enqueued(worker: LogWatcher.TaskStarter, args: match_args)
   end
 
-   @tag :skip
- test "06 runs a mock task under Oban", context do
+   test "07 runs a mock task under Oban", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       fake_task_args(context, script_file: "mock_task.R")
 
@@ -190,10 +198,10 @@ defmodule LogWatcher.MockTaskTest do
       task_id: Faker.Util.format("T%4d"),
       task_type: Faker.Util.pick(["create", "update", "generate", "analytics"]),
       task_args: %{
-        script_file: Keyword.get(opts, :script_file, "mock_task.R"),
-        error: Keyword.get(opts, :error, false),
-        num_lines: :random.uniform(6) + 6,
-        space_type: Faker.Util.pick(["mixture", "factorial", "sparsefactorial"])
+        "script_file" => Keyword.get(opts, :script_file, "mock_task.R"),
+        "error" => Keyword.get(opts, :error, ""),
+        "num_lines" => :random.uniform(6) + 6,
+        "space_type" => Faker.Util.pick(["mixture", "factorial", "sparsefactorial"])
       }
     }
   end

@@ -36,28 +36,33 @@ def read_arg_file(info, arg_file):
     return (info, args)
 
 def mock_status(info, line_no, num_lines, error, cancel):
+  raise_error = False
   progress_counter = None
   progress_total = None
   result = None
   errors = []
   if line_no == 1:
     status = 'started'
+    if error == 'started':
+      raise_error = True
   elif line_no == 2:
     status = 'validating'
+    if error == 'validating':
+      raise_error = True
   elif line_no < num_lines:
     status = 'running'
     progress_counter = line_no - 2
     progress_total = num_lines - 3
-  else:
-    if cancel:
-      status = 'canceled'
-      errors = [{'message': f'canceled on line {line_no}'}]
-    else:
-      status = 'completed'
-      if error:
-        errors = [{'message': f'error on line {line_no}', 'key': 'task_id'}]
+    if line_no == 4:
+      if error == 'running':
+        raise_error = True
       else:
-        result = {'params': [['a', 2], ['b', line_no]]}
+        if cancel:
+          status = 'canceled'
+          errors = [{'message': f'canceled on line {line_no}'}]
+  else:
+    status = 'completed'
+    result = {'params': [['a', 2], ['b', line_no]]}
 
   task_id = info['task_id']
   info['time'] = format_utcnow()
@@ -68,6 +73,9 @@ def mock_status(info, line_no, num_lines, error, cancel):
     info['progress_counter'] = progress_counter
     info['progress_total'] = progress_total
     info['progress_phase'] = 'Compiling answers'
+
+  if raise_error:
+    raise RuntimeError(f'error on line {line_no}')
 
   return (info, result, errors)
 
@@ -161,7 +169,7 @@ def run_job(args):
 
     num_lines = task_args['num_lines']
     for line_no in range(1, num_lines+1):
-      time.sleep(1.)
+      time.sleep(0.25)
       info, result, errors = mock_status(info, line_no, num_lines, error, cancel)
 
       if started_at is None:
@@ -224,6 +232,6 @@ if __name__ == '__main__':
   parser.add_argument('-t', '--task-type', help='task type', required=True)
   parser.add_argument('-g', '--gen', help='gen', type=int, required=True)
   parser.add_argument('-c', '--cancel', help='generate canceled result', action='store_true')
-  parser.add_argument('-e', '--error', help='generate error result', action='store_true')
+  parser.add_argument('-e', '--error', help='phase in which to generate error result')
   args = parser.parse_args()
   run_job(vars(args))

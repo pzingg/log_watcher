@@ -33,7 +33,7 @@ run_job <- function(args) {
   task_type <- args$task_type
   gen <- args$gen
 
-  error <- args$error
+  error <- ifelse(is.null(args$error), "", args$error)
   cancel <- args$cancel
   started_at <- NULL
   running_at <- NULL
@@ -61,7 +61,7 @@ run_job <- function(args) {
 
   num_lines <- res$args$num_lines
   for (line_no in 1:num_lines) {
-    Sys.sleep(1)
+    Sys.sleep(0.25)
 
     res <- mock_status(task_id, line_no, num_lines, error, cancel)
     set_script_status(res$status)
@@ -145,14 +145,20 @@ mock_status <- function(task_id, line_no, num_lines, error, cancel) {
   errors <- list()
   if (line_no == 1) {
     status <- "started"
+    if (identical(error, "started")) {
+      raise_error <- TRUE
+    }
   } else if (line_no == 2) {
     status <- "validating"
+    if (identical(error, "validating")) {
+      raise_error <- TRUE
+    }
   } else if (line_no < num_lines) {
     status <- "running"
     progress_counter <- line_no - 2
     progress_total <- num_lines - 3
     if (line_no == 4) {
-      if (error) {
+      if (identical(error, "running")) {
         raise_error <- TRUE
       } else if (cancel) {
         status <- "canceled"

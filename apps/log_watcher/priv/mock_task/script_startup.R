@@ -30,7 +30,7 @@ scriptStartup <- function() {
   p <- argparser::add_argument(p, "--task-type", "task id", short = "t")
   p <- argparser::add_argument(p, "--gen", "gen", short = "g", type = "integer")
   p <- argparser::add_argument(p, "--cancel", "TRUE to generate canceled result", short = "c", type = "boolean", flag = TRUE)
-  p <- argparser::add_argument(p, "--error", "TRUE to generate error result", short = "e", type = "boolean", flag = TRUE)
+  p <- argparser::add_argument(p, "--error", "phase in which to generate error result", short = "e")
 
   # Parse the command line arguments
   args <- argparser::parse_args(p, argv = pa$argv)
@@ -45,7 +45,7 @@ scriptStartup <- function() {
   # Save important data in R options
   # digits.secs for millisecond time formats
   context <- list(
-    digits.secs = 3, 
+    digits.secs = 3,
     daptics_script_name = basename(pa$script),
     daptics_session_log_path = args$log_path,
     daptics_session_id = args$session_id,

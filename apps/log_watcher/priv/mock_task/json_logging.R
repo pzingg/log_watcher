@@ -110,7 +110,7 @@ get_traceback <- function(err) {
 }
 
 make_error_list <- function(errors, system = TRUE, fatal = TRUE) {
-  category = getOption("daptics_script_status", default = "running")
+  category <- getOption("daptics_script_status", default = "running")
   lapply(errors, function(e) {
     list(message = e, category = category, system = system, fatal = fatal)
   })
@@ -212,8 +212,8 @@ maybe_log_error <- function(res, args) {
       errors = make_error_list(trace$error)
     )
     info <- list(
-      result = result_info, 
-      call = trace$call, 
+      result = result_info,
+      call = trace$call,
       traceback = trace$traceback
     )
     write_result_file(result_file, info, NULL)

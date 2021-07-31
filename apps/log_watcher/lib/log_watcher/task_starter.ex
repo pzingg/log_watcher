@@ -60,6 +60,9 @@ defmodule LogWatcher.TaskStarter do
     {:discard, "Not a task job"}
   end
 
+  @doc """
+  Note: task_args must have string keys!
+  """
   @spec watch_and_run(Session.t(), String.t(), String.t(), map()) ::
           {:ok, term()} | {:discard, term()}
   def watch_and_run(
@@ -69,7 +72,7 @@ defmodule LogWatcher.TaskStarter do
         task_args
       ) do
     log_file = Task.log_file_name(task_id, task_type, gen)
-    script_file = Map.get(task_args, :script_file) || Map.fetch!(task_args, "script_file")
+    script_file = Map.fetch!(task_args, "script_file")
 
     executable =
       if String.ends_with?(script_file, ".R") do
@@ -98,13 +101,13 @@ defmodule LogWatcher.TaskStarter do
 
     start_args =
       Map.merge(task_args, %{
-        session_id: session_id,
-        session_log_path: session_log_path,
-        task_id: task_id,
-        task_type: task_type,
-        gen: gen
+        "session_id" => session_id,
+        "session_log_path" => session_log_path,
+        "task_id" => task_id,
+        "task_type" => task_type,
+        "gen" => gen
       })
-      |> Map.put_new(:num_lines, 10)
+      |> Map.put_new("num_lines", 10)
 
     Logger.info("job #{task_id}: write arg file to #{arg_path}")
     :ok = Tasks.write_arg_file(arg_path, start_args)
@@ -171,11 +174,11 @@ defmodule LogWatcher.TaskStarter do
         executable,
         script_path,
         %{
-          session_log_path: session_log_path,
-          session_id: session_id,
-          task_id: task_id,
-          task_type: task_type,
-          gen: gen
+          "session_log_path" => session_log_path,
+          "session_id" => session_id,
+          "task_id" => task_id,
+          "task_type" => task_type,
+          "gen" => gen
         } = start_args
       ) do
     Logger.info("job #{task_id}: start_args #{inspect(start_args)}")
@@ -194,14 +197,19 @@ defmodule LogWatcher.TaskStarter do
     ]
 
     script_args =
-      [:cancel, :error]
-      |> Enum.reduce(basic_args, fn key, acc ->
-        if Map.get(start_args, key, false) do
-          ["--#{key}" | acc]
-        else
-          acc
-        end
-      end)
+      case {start_args["cancel"], start_args["error"]} do
+        {true, _} ->
+          ["--cancel" | basic_args]
+
+        {_, ""} ->
+          basic_args
+
+        {_, error} when is_binary(error) ->
+          basic_args ++ ["--error", error]
+
+        _ ->
+          basic_args
+      end
 
     Logger.info("job #{task_id}: shelling out to #{executable} with args #{inspect(script_args)}")
 
@@ -268,5 +276,17 @@ defmodule LogWatcher.TaskStarter do
         Logger.error("job #{task_id}: loop timed out")
         {:error, :timeout}
     end
+  end
+
+  @doc """
+  Borrowed from Oban.Testing.
+  Converts all atomic keys to strings, and verifies
+  that args are JSON-encodable.
+  """
+  @spec json_encode_decode(map()) :: map()
+  def json_encode_decode(map) do
+    map
+    |> Jason.encode!()
+    |> Jason.decode!()
   end
 end
