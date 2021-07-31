@@ -15,8 +15,9 @@ import time
 def format_utcnow():
   return datetime.datetime.utcnow().isoformat(timespec='milliseconds')
 
-def read_arg_file(info, arg_path):
-  with open(arg_path, 'rt') as f:
+def read_arg_file(info, arg_file):
+  path = os.path.join(info['session_log_path'], arg_file)
+  with open(path, 'rt') as f:
     args = json.load(f)
     assert info['session_id'] == args['session_id']
     assert info['task_id'] == args['task_id']
@@ -89,12 +90,16 @@ def result_file_name(task_id, task_type, gen):
 # No 'os_pid' in arg file
 ARG_KEYS = ['time', 'session_id', 'task_id', 'task_type', 'gen']
 
-def write_start_file(path, info):
+def write_start_file(start_file, info):
+  path = os.path.join(info['session_log_path'], start_file)
   with open(path, 'wt') as f:
     json.dump(info, f, indent=2)
     f.write('\n')
 
-def write_result_file(path, info, result_data):
+  log_event('task_started', info)
+
+def write_result_file(result_file, info, result_data):
+  path = os.path.join(info['session_log_path'], result_file)
   with open(path, 'wt') as f:
     result_info = {k: v for k, v in info.items() if k not in ['result']}
     result_info['result'] = {
@@ -103,6 +108,17 @@ def write_result_file(path, info, result_data):
       'data': result_data
     }
     json.dump(result_info, f, indent=2)
+    f.write('\n')
+
+  event_type = f'''task_{info['status']}'''
+  log_event(event_type, info)
+
+def log_event(event_type, info):
+  info['event_type'] = event_type
+  log_file = f'''{info['session_id']}-sesslog.jsonl'''
+  path = os.path.join(info['session_log_path'], log_file)
+  with open(path, 'at') as f:
+    json.dump(info, f)
     f.write('\n')
 
 def run_job(args):
@@ -126,6 +142,7 @@ def run_job(args):
       'time': format_utcnow(), 
       'os_pid': os_pid,
       'session_id': session_id, 
+      'session_log_path': session_log_path,
       'task_id': task_id, 
       'task_type': task_type, 
       'gen': gen,
@@ -134,9 +151,10 @@ def run_job(args):
     }
     print(f'mock_task, writing initial log file')
     flush_info(info, f)
+    log_event('task_created', info)
 
     arg_file = arg_file_name(task_id, task_type, gen)
-    info, task_args = read_arg_file(info, os.path.join(session_log_path, arg_file))
+    info, task_args = read_arg_file(info, arg_file)
 
     print(f'mock_task, task_args are {task_args}')
     flush_info(info, f)
@@ -176,12 +194,12 @@ def run_job(args):
       if write_start:
         print(f'mock_task, writing start file')
         start_file = start_file_name(task_id, task_type, gen)
-        write_start_file(os.path.join(session_log_path, start_file), info)
+        write_start_file(start_file, info)
         write_start = False
 
       if write_result and result_file is not None:
         print(f'mock_task, writing result file')
-        write_result_file(os.path.join(session_log_path, result_file), info, result)
+        write_result_file(result_file, info, result)
         write_result = False
 
       flush_info(info, f)

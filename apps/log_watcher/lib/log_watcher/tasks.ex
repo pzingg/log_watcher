@@ -9,24 +9,6 @@ defmodule LogWatcher.Tasks do
 
   require Logger
 
-  ## PubSub utilities
-  @spec session_topic(String.t()) :: String.t()
-  def session_topic(session_id) do
-    "session:#{session_id}"
-  end
-
-  @spec subscribe(String.t()) :: :ok | {:error, term()}
-  def subscribe(topic) do
-    Logger.info("#{inspect(self())} subscribing to #{topic}")
-    Phoenix.PubSub.subscribe(LogWatcher.PubSub, topic)
-  end
-
-  @spec broadcast(String.t(), term()) :: :ok | {:error, term()}
-  def broadcast(topic, message) when is_tuple(message) do
-    Logger.info("#{inspect(self())} broadcasting to #{topic}: #{Kernel.elem(message, 0)}")
-    Phoenix.PubSub.broadcast(LogWatcher.PubSub, topic, message)
-  end
-
   ## Oban.Jobs in database
   @spec list_jobs(String.t()) :: [Oban.Job.t()]
   def list_jobs(queue_name \\ "tasks") when is_binary(queue_name) do
@@ -75,32 +57,40 @@ defmodule LogWatcher.Tasks do
   @doc """
   Create a Session struct object from an id and path.
   """
-  @spec create_session!(String.t(), String.t(), integer()) :: Session.t()
-  def create_session!(session_id, session_log_path, gen) do
-    create_session(session_id, session_log_path, gen)
+  @spec create_session!(String.t(), String.t(), String.t(), String.t(), integer()) :: Session.t()
+  def create_session!(session_id, name, description, session_log_path, gen) do
+    create_session(session_id, name, description, session_log_path, gen)
     |> LogWatcher.maybe_raise_input_error("Errors reading session", :session_id)
   end
 
-  @spec create_session(String.t(), String.t(), integer()) ::
-          {:ok, Session.t()} | {:error, Ecto.Changeset.t()}
-  def create_session(session_id, session_log_path, gen) do
+  @spec create_session(String.t(), String.t(), String.t(), String.t(), integer()) ::
+          {:ok, Session.t()} | {:error, term()}
+  def create_session(session_id, name, description, session_log_path, gen) do
     %{
       "session_id" => session_id,
+      "name" => name,
+      "description" => description,
       "session_log_path" => session_log_path,
       "gen" => gen
     }
     |> normalize_session_create_input()
     |> Ecto.Changeset.apply_action(:input)
+    |> maybe_init_session_log()
   end
 
   @spec normalize_session_create_input(map()) :: Ecto.Changeset.t()
   defp normalize_session_create_input(params) do
-    fields = [:session_id, :session_log_path, :gen]
+    fields = [:session_id, :name, :description, :session_log_path, :gen]
 
     Session.new()
     |> Ecto.Changeset.cast(params, fields)
     |> Ecto.Changeset.validate_required(Session.required_fields(fields))
   end
+
+  defp maybe_init_session_log({:ok, %Session{} = session}) do
+    Session.write_event(session, :create_session)
+  end
+  defp maybe_init_session_log(other), do: other
 
   @spec update_session(Session.t(), map()) ::
           {:ok, Session.t()} | {:error, Ecto.Changeset.t()}
@@ -221,14 +211,14 @@ defmodule LogWatcher.Tasks do
   end
 
   @spec log_files_for_task(String.t(), boolean()) :: [String.t()]
-  defp log_files_for_session(session_log_path, include_archived \\ false) do
+  defp log_files_for_session(session_log_path, include_archived) do
     Path.join(session_log_path, all_task_log_file_glob(include_archived))
     |> Path.wildcard()
   end
 
   @spec all_task_log_file_glob(boolean()) :: String.t()
-  defp all_task_log_file_glob(true), do: "*-log.json?"
-  defp all_task_log_file_glob(_), do: "*-log.jsonl"
+  defp all_task_log_file_glob(false), do: "*-log.jsonl"
+  defp all_task_log_file_glob(_), do: "*-log.json?"
 
   @spec parse_log_file_name(String.t(), String.t()) :: map()
   defp parse_log_file_name(session_id, log_file_path) do

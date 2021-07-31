@@ -7,7 +7,7 @@ defmodule LogWatcher.FileWatcher do
 
   require Logger
 
-  alias LogWatcher.Tasks
+  alias LogWatcher.Tasks.Session
 
   defmodule WatchedFile do
     @enforce_keys [:stream]
@@ -64,7 +64,7 @@ defmodule LogWatcher.FileWatcher do
   """
   @spec start_link_and_watch_file(String.t(), String.t(), String.t()) :: :ok
   def start_link_and_watch_file(session_id, session_log_path, log_file) do
-    with :ok <- Tasks.session_topic(session_id) |> Tasks.subscribe(),
+    with :ok <- Session.events_topic(session_id) |> Session.subscribe(),
          {:ok, _watcher_pid} <- start_or_find_link(session_id, session_log_path),
          {:ok, _file} <- add_watch(session_id, log_file) do
       :ok
@@ -326,7 +326,7 @@ defmodule LogWatcher.FileWatcher do
   defp handle_lines(session_id, start_sent, file_name, lines) do
     Logger.info("file #{file_name} start_sent #{start_sent} got #{Enum.count(lines)} lines")
 
-    topic = Tasks.session_topic(session_id)
+    topic = Session.events_topic(session_id)
 
     Enum.reduce(lines, start_sent, fn line, acc ->
       info = Jason.decode!(line, keys: :atoms)
@@ -334,16 +334,16 @@ defmodule LogWatcher.FileWatcher do
 
       next_acc =
         if !acc && info[:status] == "running" do
-          Tasks.broadcast(topic, {:task_started, file_name, info})
+          Session.broadcast(topic, {:task_started, file_name, info})
           true
         else
           acc
         end
 
-      Tasks.broadcast(topic, {:task_updated, file_name, info})
+      Session.broadcast(topic, {:task_updated, file_name, info})
 
       if Enum.member?(["completed", "canceled"], info[:status]) do
-        Tasks.broadcast(topic, {:task_completed, file_name})
+        Session.broadcast(topic, {:task_completed, file_name})
       end
 
       next_acc

@@ -1,5 +1,6 @@
 library(futile.logger, quietly = TRUE)
 library(jsonlite, quietly = TRUE)
+library(rlist, quietly = TRUE)
 
 ## JSON logging for futile.logger
 
@@ -73,7 +74,7 @@ set_script_status <- function(status) {
 ## Capture traceback and other formatting
 
 format_utcnow <- function() {
-  format(Sys.time(), "%Y-%m-%dT%H:%M:%S")
+  format(Sys.time(), "%Y-%m-%dT%H:%M:%0S")
 }
 
 # borrowed from
@@ -117,6 +118,10 @@ make_error_list <- function(errors, system = TRUE, fatal = TRUE) {
 
 ## Log file name functions
 
+session_log_file_name <- function(session_id) {
+  paste0(session_id, "-sesslog.jsonl")
+}
+
 make_log_prefix <- function(task_id, task_type, gen) {
   gen_str <- paste0("0000", gen)
   gen_str <- substring(gen_str, nchar(gen_str) - 3)
@@ -141,6 +146,43 @@ result_file_name <- function(task_id, task_type, gen) {
 
 ## Main logging functions
 
+log_event <- function(event_type, info) {
+  event <- create_event(event_type, info)
+  contents <- jsonlite::toJSON(event,
+    Date = "ISO8601",
+    POSIXt = "ISO8601",
+    factor = "string",
+    null = "null",
+    na = "null",
+    auto_unbox = TRUE,
+    pretty = FALSE
+  )
+
+  event_file <- session_log_file_name(event$session_id)
+  path <- file.path(event$session_log_path, event_file)
+  con <- file(path, open = "at")
+  writeLines(contents, con = con)
+  flush(con)
+  close(con)
+  con <- NULL
+}
+
+create_event <- function(event_type, info) {
+  event <- list(
+    session_id = getOption("daptics_session_id"),
+    session_log_path = getOption("daptics_session_log_path"),
+    gen = getOption("daptics_task_gen"),
+    task_id = getOption("daptics_task_id"),
+    task_type = getOption("daptics_task_type"),
+    gen = getOption("daptics_task_gen"),
+    os_pid = getOption("daptics_script_pid"),
+    status = getOption("daptics_script_status"),
+    event_type = event_type,
+    time = format_utcnow()
+  )
+  rlist::list.merge(event, info)
+}
+
 log_res <- function(message, res, level = "INFO") {
   log_fn <- switch(level,
     INFO = futile.logger::flog.info,
@@ -164,8 +206,6 @@ maybe_log_error <- function(res, args) {
     cat(paste0("maybe_log_error: ", trace$error, "\n"))
 
     result_file <- result_file_name(args$task_id, args$task_type, args$gen)
-    result_path <- file.path(args$log_path, result_file)
-
     result_info <- list(
       succeeded = FALSE,
       file = result_file,
@@ -176,9 +216,8 @@ maybe_log_error <- function(res, args) {
       call = trace$call, 
       traceback = trace$traceback
     )
-    write_result_file(result_path, info, NULL)
+    write_result_file(result_file, info, NULL)
 
-    set_script_status("completed")
     res <- list(
       completed_at = format_utcnow(),
       result = result_info
@@ -221,7 +260,7 @@ read_arg_file <- function(arg_path) {
   )
 }
 
-write_start_file <- function(path, info) {
+write_start_file <- function(start_file, info) {
   info$time <- format_utcnow()
   info$session_id <- getOption("daptics_session_id")
   info$session_log_path <- getOption("daptics_session_log_path")
@@ -238,10 +277,21 @@ write_start_file <- function(path, info) {
     auto_unbox = TRUE,
     pretty = TRUE
   )
-  write(contents, path)
+  path <- file.path(info$session_log_path, start_file)
+  write(contents, file = path)
+
+  log_event("task_started", info)
 }
 
-write_result_file <- function(path, info, result_data) {
+write_result_file <- function(result_file, info, result_data) {
+  info$status <- getOption("daptics_script_status")
+  if (!identical(info$status, "canceled")) {
+    if (!identical(info$status, "completed")) {
+      info$status <- "completed"
+      set_script_status(info$status)
+    }
+  }
+
   info$time <- format_utcnow()
   info$session_id <- getOption("daptics_session_id")
   info$session_log_path <- getOption("daptics_session_log_path")
@@ -249,6 +299,8 @@ write_result_file <- function(path, info, result_data) {
   info$task_type <- getOption("daptics_task_type")
   info$gen <- getOption("daptics_task_gen")
   info$os_pid <- getOption("daptics_script_pid")
+
+  saved_result <- info$result
   info$result <- list(
     succeeded = info$result$succeeded,
     errors = info$result$errors,
@@ -263,5 +315,10 @@ write_result_file <- function(path, info, result_data) {
     auto_unbox = TRUE,
     pretty = TRUE
   )
-  write(contents, path)
+  path <- file.path(info$session_log_path, result_file)
+  write(contents, file = path)
+
+  event_type <- paste0("task_", info$status)
+  info$result <- saved_result
+  log_event(event_type, info)
 }

@@ -11,10 +11,12 @@ defmodule LogWatcher.TypedStructTest do
   end
 
   test "02 session ecto types" do
-    assert Enum.sort(Session.required_fields()) == [:session_id, :session_log_path]
-    assert Enum.sort(Session.all_fields()) == [:gen, :session_id, :session_log_path]
+    assert Enum.sort(Session.required_fields()) == [:description, :name, :session_id, :session_log_path]
+    assert Enum.sort(Session.all_fields()) == [:description, :gen, :name, :session_id, :session_log_path]
     assert Enum.sort(Session.changeset_types()) == [
+      {:description, :string},
       {:gen, :integer},
+      {:name, :string},
       {:session_id, :string},
       {:session_log_path, :string}
     ]

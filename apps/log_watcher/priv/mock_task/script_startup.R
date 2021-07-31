@@ -43,7 +43,9 @@ scriptStartup <- function() {
   stopifnot(length(args$gen) == 1)
 
   # Save important data in R options
+  # digits.secs for millisecond time formats
   context <- list(
+    digits.secs = 3, 
     daptics_script_name = basename(pa$script),
     daptics_session_log_path = args$log_path,
     daptics_session_id = args$session_id,

@@ -7,7 +7,16 @@ defmodule LogWatcher do
   if it comes from the database, an external API or others.
   """
 
-  ### Changeset utilities
+  ## General utilities
+
+  @spec format_utcnow() :: String.t()
+  def format_utcnow() do
+    NaiveDateTime.utc_now()
+    |> NaiveDateTime.truncate(:millisecond)
+    |> NaiveDateTime.to_iso8601()
+  end
+
+  ## Changeset utilities
 
   defmodule InputError do
     defexception [:message]

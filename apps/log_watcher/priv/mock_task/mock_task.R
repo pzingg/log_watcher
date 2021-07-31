@@ -10,6 +10,7 @@ source("script_startup.R")
 # arg_file_name
 # log_file_name
 # result_file_name
+# log_event
 # log_res
 # maybe_log_error
 # read_arg_file
@@ -41,10 +42,13 @@ run_job <- function(args) {
 
   cat(paste0("run_job: cancel ", cancel, " error ", error, "\n"))
   cat("writing first log message\n")
-
-  set_script_status("created")
-  message <- paste0("Task ", task_id, " created")
-  futile.logger::flog.info(message)
+  info <- list(
+    status = "created",
+    message = paste0("Task ", task_id, " created")
+  )
+  set_script_status(info$status)
+  futile.logger::flog.info(info$message)
+  log_event("task_created", info)
   cat("log file created\n")
 
   arg_file <- arg_file_name(task_id, task_type, gen)
@@ -74,7 +78,7 @@ run_job <- function(args) {
       res$started_at <- started_at
     }
 
-    if (is.null(running_at) && status == "running") {
+    if (is.null(running_at) && identical(status, "running")) {
       running_at <- format_utcnow()
       res$running_at <- running_at
       write_start <- TRUE
@@ -82,7 +86,7 @@ run_job <- function(args) {
 
     if (status %in% c("canceled", "completed")) {
       result_file <- result_file_name(task_id, task_type, gen)
-      if (status == "completed" && length(errors) == 0) {
+      if (identical(status, "completed") && length(errors) == 0) {
         result_info <- list(
           succeeded = TRUE,
           file = result_file,
@@ -102,15 +106,13 @@ run_job <- function(args) {
 
     if (write_start) {
       start_file <- start_file_name(task_id, task_type, gen)
-      start_path <- file.path(session_log_path, start_file)
-      write_start_file(start_path, res)
+      write_start_file(start_file, res)
       cat("wrote start\n")
       write_start <- FALSE
     }
 
     if (write_result && !is.null(result_file)) {
-      result_path <- file.path(session_log_path, result_file)
-      write_result_file(result_path, res, result)
+      write_result_file(result_file, res, result)
       cat("wrote result\n")
     }
 
@@ -120,13 +122,6 @@ run_job <- function(args) {
     if (write_result) {
       break
     }
-  }
-}
-
-
-maybe_blowup <- function(error_flag) {
-  if (error_flag) {
-    blowup_a()
   }
 }
 
@@ -143,6 +138,7 @@ blowup <- function() {
 }
 
 mock_status <- function(task_id, line_no, num_lines, error, cancel) {
+  raise_error <- FALSE
   progress_counter <- NULL
   progress_total <- NULL
   result <- NULL
@@ -155,18 +151,17 @@ mock_status <- function(task_id, line_no, num_lines, error, cancel) {
     status <- "running"
     progress_counter <- line_no - 2
     progress_total <- num_lines - 3
-  } else {
-    if (cancel) {
-      status <- "canceled"
-      errors <- paste0("canceled on line ", line_no)
-    } else {
-      status <- "completed"
+    if (line_no == 4) {
       if (error) {
-        errors <- paste0("error on line ", line_no)
-      } else {
-        result <- list(params = list(list(a = 2), list(b = line_no)))
+        raise_error <- TRUE
+      } else if (cancel) {
+        status <- "canceled"
+        errors <- paste0("canceled on line ", line_no)
       }
     }
+  } else {
+    status <- "completed"
+    result <- list(params = list(list(a = 2), list(b = line_no)))
   }
 
   if (!is.null(progress_counter) && !is.null(progress_total)) {
@@ -179,7 +174,9 @@ mock_status <- function(task_id, line_no, num_lines, error, cancel) {
     progress <- NULL
   }
 
-  maybe_blowup(error)
+  if (raise_error) {
+    blowup_a()
+  }
 
   list(
     status = status,

@@ -33,6 +33,8 @@ defmodule LogWatcher.TaskStarter do
         id: id,
         args: %{
           "session_id" => session_id,
+          "name" => name,
+          "description" => description,
           "session_log_path" => session_log_path,
           "gen" => gen_arg,
           "task_id" => task_id,
@@ -49,7 +51,7 @@ defmodule LogWatcher.TaskStarter do
         gen_arg
       end
 
-    Tasks.create_session!(session_id, session_log_path, gen)
+    Tasks.create_session!(session_id, name, description, session_log_path, gen)
     |> watch_and_run(task_id, task_type, task_args)
   end
 
@@ -58,17 +60,16 @@ defmodule LogWatcher.TaskStarter do
     {:discard, "Not a task job"}
   end
 
-  @spec watch_and_run(Session.t(), String.t(), String.t(), map(), Keyword.t()) ::
+  @spec watch_and_run(Session.t(), String.t(), String.t(), map()) ::
           {:ok, term()} | {:discard, term()}
   def watch_and_run(
         %Session{session_id: session_id, session_log_path: session_log_path, gen: gen},
         task_id,
         task_type,
-        task_args,
-        opts \\ []
+        task_args
       ) do
     log_file = Task.log_file_name(task_id, task_type, gen)
-    script_file = Keyword.get(opts, :script_file, "mock_task.py")
+    script_file = Map.get(task_args, :script_file) || Map.fetch!(task_args, "script_file")
 
     executable =
       if String.ends_with?(script_file, ".R") do
@@ -213,8 +214,8 @@ defmodule LogWatcher.TaskStarter do
     if exit_status == 0 do
       :ok
     else
-      Tasks.session_topic(session_id)
-      |> Tasks.broadcast({:script_error, exit_status, output})
+      Session.events_topic(session_id)
+      |> Session.broadcast({:script_error, exit_status, output})
 
       {:error, exit_status}
     end
