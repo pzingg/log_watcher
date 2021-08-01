@@ -110,7 +110,7 @@ defmodule LogWatcher.MockTaskTest do
     assert_enqueued(worker: LogWatcher.TaskStarter, args: match_args)
   end
 
-   test "07 runs a mock task under Oban", context do
+  test "07 runs a mock task under Oban", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       fake_task_args(context, script_file: "mock_task.R")
 
