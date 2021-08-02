@@ -56,7 +56,9 @@ defmodule LogWatcher.FileWatcher do
 
   @type gproc_key :: {:n, :l, {:session_id, String.t()}}
 
-  @task_started_status ["running", "completed", "canceled"]
+  @task_started_status ["running", "cancelled", "completed"]
+
+  @task_completed_status ["cancelled", "completed"]
 
   @doc """
   Public interface. Subscribe to task messages, start the GenServer for a session,
@@ -275,10 +277,9 @@ defmodule LogWatcher.FileWatcher do
          session_id,
          %WatchedFile{
            stream: stream,
-           start_sent: start_sent,
            position: position,
-           size: size,
-           last_modified: last_modified
+           # last_modified: last_modified,
+           size: size
          } = file
        ) do
     # Don't check change in :mtime! Things can happen fast!
@@ -291,17 +292,14 @@ defmodule LogWatcher.FileWatcher do
         |> Stream.drop(position)
         |> Enum.into([])
 
-      file_name = Path.basename(stream.path)
-      next_start_sent = handle_lines(session_id, start_sent, file_name, lines)
+      next_file = %WatchedFile{
+        file
+        | position: position + length(lines),
+          size: stat.size,
+          last_modified: stat.mtime
+      }
 
-      {lines,
-       %WatchedFile{
-         file
-         | start_sent: next_start_sent,
-           position: position + length(lines),
-           size: stat.size,
-           last_modified: stat.mtime
-       }}
+      {lines, handle_lines(session_id, next_file, lines)}
     else
       {:exists, _} ->
         Logger.error("WatchedFile #{stream.path} does not exist")
@@ -321,29 +319,31 @@ defmodule LogWatcher.FileWatcher do
     end
   end
 
-  @spec handle_lines(String.t(), boolean(), String.t(), [String.t()]) :: boolean()
-  defp handle_lines(_session_id, start_sent, _file_name, []), do: start_sent
+  @spec handle_lines(String.t(), WatchedFile.t(), [String.t()]) :: boolean()
+  defp handle_lines(_session_id, %WatchedFile{} = file, []), do: file
 
-  defp handle_lines(session_id, start_sent, file_name, lines) do
-    Logger.info("file #{file_name} start_sent #{start_sent} got #{Enum.count(lines)} lines")
+  defp handle_lines(session_id, %WatchedFile{stream: stream} = file, lines) do
+    file_name = Path.basename(stream.path)
+
+    Logger.info("file #{file_name} got #{Enum.count(lines)} lines")
 
     topic = Session.events_topic(session_id)
 
-    Enum.reduce(lines, start_sent, fn line, acc ->
-      info = Jason.decode!(line, keys: :atoms)
-      Logger.info("acc #{acc} status #{info[:status]}")
+    Enum.reduce(lines, file, fn line, %WatchedFile{start_sent: start_sent} = acc ->
+      %{status: status} = info = Jason.decode!(line, keys: :atoms)
+      Logger.info("start_sent #{start_sent} status #{info[:status]}")
 
       next_acc =
-        if !acc && Enum.member?(@task_started_status, info[:status]) do
+        if !start_sent && Enum.member?(@task_started_status, status) do
           Session.broadcast(topic, {:task_started, file_name, info})
-          true
+          %WatchedFile{acc | start_sent: true}
         else
           acc
         end
 
       Session.broadcast(topic, {:task_updated, file_name, info})
 
-      if Enum.member?(["completed", "canceled"], info[:status]) do
+      if Enum.member?(@task_completed_status, status) do
         Session.broadcast(topic, {:task_completed, file_name})
       end
 

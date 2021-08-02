@@ -22,7 +22,7 @@ library(rlist, quietly = TRUE)
 #'   task_id*:        command ID string
 #'   os_pid*:         PID of current process
 #'   level*:          "TRACE", "DEBUG", "INFO", "WARN", or "ERROR"
-#'   status*:         "created", "input", "validating", "running", "completed", or "canceled"
+#'   status*:         "created", "input", "validating", "running", "completed", or "cancelled"
 #'   message*:        string message
 #'   result:          if the process was detached or completed: an object that will be used for the resolver's "data"
 #'   errors:          if the process was detached or completed: a list of "categorized error" objects with these items:
@@ -31,7 +31,7 @@ library(rlist, quietly = TRUE)
 #'     system:        true if this was an internal system error
 #'     fatal:         true if this was a fatal error
 json_task_layout <- function(level, msg, id = "", ...) {
-  if (is(msg, "condition")) {
+  if (inherits(msg, "condition")) {
     msg <- msg$message
   }
   message <- paste(msg, collapse = "\n")
@@ -125,34 +125,48 @@ format_utcnow <- function() {
   format(Sys.time(), "%Y-%m-%dT%H:%M:%0S")
 }
 
-# borrowed from
+# Borrowed from
 # https://github.com/r-lib/evaluate/blob/f0119259b3a1d335e399ac2235e91bb0e5b769b6/R/traceback.r#L29
+# For stops, class(res) == c("simpleError", "error", "condition")
+# For interrupts, class(res) == c("interrupt", "condition")
 try_capture_stack <- function(expr, env = environment()) {
   quoted_code <- quote(expr)
+  frame <- sys.nframe()
   capture_calls <- function(e) {
     e$calls <- utils::head(sys.calls()[-seq_len(frame + 7)], -2)
     signalCondition(e)
   }
-  frame <- sys.nframe()
-  tryCatch(
-    withCallingHandlers(eval(quoted_code, env), error = capture_calls),
-    error = identity
+  res <- tryCatch(
+    withCallingHandlers(eval(quoted_code, env),
+      error = capture_calls,
+      interrupt = capture_calls
+    ),
+    error = identity, interrupt = identity
   )
+  res
 }
 
-get_traceback <- function(err) {
-  if (inherits(err, "try-error")) {
-    # no expanded traceback
-    condition <- attr(err, "condition")[["call"]]
+get_traceback <- function(cond) {
+  error_type <- ifelse(inherits(cond, "interrupt"), "interrupt", "error")
+  if (inherits(cond, "try-error")) {
+    # no expanded traceback for try-error
+    condition <- attr(cond, "condition")[["call"]]
     err_msg <- condition[["message"]]
     call_msg <- condition[["call"]]
     stack_msg <- list()
+  } else if (inherits(cond, "interrupt")) {
+    # interrupt
+    err_msg <- "interrupt received"
+    stack_msg <- lapply(cond$calls, function(x) utils::capture.output(print(x)))
+    call_msg <- tail(stack_msg, 1)
   } else {
-    err_msg <- err$message
-    call_msg <- utils::capture.output(print(err$call))
-    stack_msg <- lapply(err$calls, function(x) utils::capture.output(print(x)))
+    # simpleError
+    err_msg <- cond$message
+    call_msg <- utils::capture.output(print(cond$call))
+    stack_msg <- lapply(cond$calls, function(x) utils::capture.output(print(x)))
   }
   list(
+    error_type = error_type,
     error = as.character(err_msg),
     call = as.character(call_msg),
     traceback = stack_msg
@@ -239,8 +253,9 @@ log_res <- function(message, res, level = "INFO") {
   do.call(log_fn, logger_args)
 }
 
-log_error <- function(error, args) {
-  trace <- get_traceback(error)
+# cond should normally be a "simpleError", "try-error", or "interrupt"
+log_error <- function(cond, args) {
+  trace <- get_traceback(cond)
   message <- trimws(trace$error)
 
   if (is.null(args)) {
@@ -255,8 +270,10 @@ log_error <- function(error, args) {
     errors = make_error_list(message)
   )
 
+  status <- ifelse(identical(trace$error_type, "interrupt"), "cancelled", "completed")
   info <- list(
     message = message,
+    status = status,
     result = result_info,
     call = trace$call,
     traceback = trace$traceback
@@ -266,6 +283,7 @@ log_error <- function(error, args) {
     # Error occurred before args were correctly parsed.
     jcat(info)
   } else {
+    set_script_status(status)
     write_result_file(result_file, info, NULL)
     res <- list(
       completed_at = format_utcnow(),
@@ -299,11 +317,14 @@ read_arg_file <- function(arg_path) {
   args["task_type"] <- NULL
   args["gen"] <- NULL
 
-  list(
+  res <- list(
     status = "validating",
     message = paste0("Task ", task_id, " parsed ", length(args), " args"),
     args = args
   )
+
+  set_script_status("validating")
+  res
 }
 
 write_start_file <- function(start_file, info) {
@@ -322,7 +343,7 @@ write_start_file <- function(start_file, info) {
 
 write_result_file <- function(result_file, info, result_data) {
   info$status <- getOption("daptics_script_status")
-  if (!identical(info$status, "canceled")) {
+  if (!identical(info$status, "cancelled")) {
     if (!identical(info$status, "completed")) {
       info$status <- "completed"
       set_script_status(info$status)

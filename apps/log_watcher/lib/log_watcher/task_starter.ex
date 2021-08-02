@@ -83,7 +83,6 @@ defmodule LogWatcher.TaskStarter do
       ) do
     log_file = Task.log_file_name(task_id, task_type, gen)
     script_file = Map.fetch!(task_args, "script_file")
-    script_timeout = Map.get(task_args, "script_timeout", @default_script_timeout)
 
     executable =
       if String.ends_with?(script_file, ".R") do
@@ -134,10 +133,14 @@ defmodule LogWatcher.TaskStarter do
       end)
 
     # Process incoming messages to find a result
+    script_timeout = Map.get(task_args, "script_timeout", @default_script_timeout)
+    expiry = System.monotonic_time(:millisecond) + script_timeout
+    cancel_test = Map.get(task_args, "cancel_test", false)
+
     Logger.info("job #{task_id}: script task ref is #{inspect(script_task.ref)}")
     Logger.info("job #{task_id}: process messages until :task_started is received")
-    expiry = System.monotonic_time(:millisecond) + script_timeout
-    result = loop(task_id, script_task, expiry)
+    Logger.info("job #{task_id}: cancel_test is #{cancel_test}")
+    result = loop(task_id, script_task, cancel_test, expiry)
 
     # Return disposition for Oban
     Logger.info("job #{task_id}: result is #{inspect(result)}")
@@ -214,14 +217,11 @@ defmodule LogWatcher.TaskStarter do
     ]
 
     script_args =
-      case {start_args["cancel"], start_args["error"]} do
-        {true, _} ->
-          ["--cancel" | basic_args]
-
-        {_, ""} ->
+      case start_args["error"] do
+        "" ->
           basic_args
 
-        {_, error} when is_binary(error) ->
+        error when is_binary(error) ->
           basic_args ++ ["--error", error]
 
         _ ->
@@ -244,7 +244,7 @@ defmodule LogWatcher.TaskStarter do
     parse_script_output(info, output, exit_status)
   end
 
-  @spec loop(String.t(), Elixir.Task.t(), integer()) ::
+  @spec loop(String.t(), Elixir.Task.t(), boolean(), integer()) ::
           {:ok, map()}
           | {:error,
              {:script_terminated, term()}
@@ -273,7 +273,7 @@ defmodule LogWatcher.TaskStarter do
   Returns `{:error, :timeout}` if the script never received a "task started"
   message or termination message before the timeout period.
   """
-  def loop(task_id, %Elixir.Task{ref: task_ref, pid: _task_pid} = task, expiry) do
+  def loop(task_id, %Elixir.Task{ref: task_ref, pid: _task_pid} = task, cancel_test, expiry) do
     Logger.info("job #{task_id}: re-entering loop")
 
     time_now = System.monotonic_time(:millisecond)
@@ -308,13 +308,20 @@ defmodule LogWatcher.TaskStarter do
         Logger.info("job #{task_id}, loop returning :script_crashed")
         {:error, {:script_crashed, reason}}
 
-      {:task_updated, file_name, _info} ->
+      {:task_updated, file_name, info} ->
         Logger.info("job #{task_id}, loop received :task_updated on #{file_name}")
-        loop(task_id, task, expiry)
+        os_pid = Map.fetch!(info, :os_pid)
+
+        if os_pid != 0 && cancel_test do
+          Logger.error("job #{task_id}, sending SIGINT to #{os_pid}")
+          _ = System.cmd("kill", ["-s", "INT", to_string(os_pid)])
+        end
+
+        loop(task_id, task, false, expiry)
 
       other ->
         Logger.info("job #{task_id}, loop received #{inspect(other)}")
-        loop(task_id, task, expiry)
+        loop(task_id, task, cancel_test, expiry)
     after
       time_left ->
         Logger.error("job #{task_id}: loop timed out")

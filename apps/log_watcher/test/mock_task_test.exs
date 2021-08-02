@@ -82,8 +82,18 @@ defmodule LogWatcher.MockTaskTest do
     {:ok, _} = wait_on_script_task(task, 30_000)
   end
 
-  @tag :skip
-  test "08 finds the running task", context do
+  test "08 sends SIGINT to cancel a mock task", context do
+    %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
+      fake_task_args(context, script_file: "mock_task.R", cancel_test: true)
+
+    archive_existing_tasks(session)
+
+    start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
+    task = assert_script_errors(start_result, task_id, "reading", "cancelled")
+    {:ok, _} = wait_on_script_task(task, 30_000)
+  end
+
+  test "09 finds the running task", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       fake_task_args(context, script_file: "mock_task.R")
 
@@ -113,7 +123,7 @@ defmodule LogWatcher.MockTaskTest do
     assert Enum.empty?(task_list)
   end
 
-  test "09 enqueues an Oban job", context do
+  test "10 enqueues an Oban job", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       fake_task_args(context, script_file: "mock_task.R")
 
@@ -139,7 +149,7 @@ defmodule LogWatcher.MockTaskTest do
     Process.sleep(5_000)
   end
 
-  test "10 runs a mock task under Oban", context do
+  test "11 runs a mock task under Oban", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       fake_task_args(context, script_file: "mock_task.R")
 
@@ -172,18 +182,24 @@ defmodule LogWatcher.MockTaskTest do
     task
   end
 
-  @spec assert_script_errors(term(), String.t(), String.t()) :: {Elixir.Task.t(), [term()]}
-  defp assert_script_errors(start_result, task_id, category) do
+  @spec assert_script_errors(term(), String.t(), String.t(), String.t()) ::
+          {Elixir.Task.t(), [term()]}
+  defp assert_script_errors(
+         start_result,
+         task_id,
+         expected_category,
+         expected_status \\ "completed"
+       ) do
     {:ok, %{task_id: job_task_id, status: status, message: message, script_task: task} = info} =
       start_result
 
     assert job_task_id == task_id
-    assert status == "completed"
+    assert status == expected_status
     errors = get_in(info, [:result, :errors])
     assert !is_nil(errors)
     first_error = hd(errors)
     assert !is_nil(first_error)
-    assert first_error.category == category
+    assert first_error.category == expected_category
     task
   end
 
@@ -249,6 +265,7 @@ defmodule LogWatcher.MockTaskTest do
       task_args: %{
         "script_file" => Keyword.get(opts, :script_file, "mock_task.R"),
         "error" => Keyword.get(opts, :error, ""),
+        "cancel_test" => Keyword.get(opts, :cancel_test, false),
         "num_lines" => :random.uniform(6) + 6,
         "space_type" => Faker.Util.pick(["mixture", "factorial", "sparsefactorial"])
       }

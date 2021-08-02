@@ -14,7 +14,6 @@ source("json_logging.R")
 #'  \code{task_id} The task (command) ID.
 #'  \code{task_type} The task type.
 #'  \code{gen} The generation number when the task is started.
-#'  \code{cancel} TRUE if the task is to be canceled (testing flag).
 #'  \code{error} A non-empty string naming a phase if the task is to raise an
 #'      error (testing flag).
 start_script <- function() {
@@ -39,7 +38,6 @@ start_script <- function() {
   p <- argparser::add_argument(p, "--task-id", "task id", short = "i")
   p <- argparser::add_argument(p, "--task-type", "task id", short = "t")
   p <- argparser::add_argument(p, "--gen", "gen", short = "g", type = "integer")
-  p <- argparser::add_argument(p, "--cancel", "TRUE to generate canceled result", short = "c", type = "boolean", flag = TRUE)
   p <- argparser::add_argument(p, "--error", "phase in which to generate error result", short = "e", default = "none")
 
   # Rscript function

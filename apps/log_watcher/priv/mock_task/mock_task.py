@@ -2,7 +2,8 @@
 import datetime
 import json
 import os
-import random
+import signal
+import sys
 import time
 
 # TODO: put these in -log.jsonl, -start.json, and/or -result.json
@@ -129,6 +130,10 @@ def log_event(event_type, info):
     json.dump(info, f)
     f.write('\n')
 
+def cancel_task(signal_number, frame):
+  # TODO: set status to "canceled", and write_result_file()
+  sys.exit(2)
+
 def run_job(args):
   session_log_path = args['log_path']
   session_id = args['session_id']
@@ -160,6 +165,8 @@ def run_job(args):
     print(f'mock_task, writing initial log file')
     flush_info(info, f)
     log_event('task_created', info)
+
+    signal.signal(signal.SIGUSR1, cancel_task)
 
     arg_file = arg_file_name(task_id, task_type, gen)
     info, task_args = read_arg_file(info, arg_file)

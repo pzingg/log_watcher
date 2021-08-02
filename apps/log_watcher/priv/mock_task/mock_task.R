@@ -30,24 +30,15 @@ run_job <- function(args) {
   gen <- args$gen
 
   error <- ifelse(is.null(args$error), "none", args$error)
-  cancel <- args$cancel
   started_at <- NULL
   running_at <- NULL
   write_start <- FALSE
   write_result <- FALSE
 
-  jcat(paste0("run_job: cancel ", cancel, " error ", error, "\n"))
+  jcat(paste0("run_job: error ", error, "\n"))
+
   jcat("writing first log message\n")
-  res <- list(
-    session_id = session_id,
-    session_log_path = session_log_path,
-    task_id = task_id,
-    task_type = task_type,
-    gen = gen,
-    status = "created",
-    message = paste0("Task ", task_id, " created")
-  )
-  set_script_status(res$status)
+  res <- create_task(args)
   futile.logger::flog.info(res$message)
   log_event("task_created", res)
   jcat("log file created\n")
@@ -55,13 +46,11 @@ run_job <- function(args) {
   set_script_status("reading")
   arg_file <- arg_file_name(task_id, task_type, gen)
   arg_path <- file.path(session_log_path, arg_file)
-
   if (identical(error, "reading")) {
     blowup_a()
   }
 
   res <- read_arg_file(arg_path)
-  set_script_status(res$status)
   futile.logger::flog.info(res$message)
   jcat("read arg file\n")
 
@@ -69,8 +58,7 @@ run_job <- function(args) {
   for (line_no in 1:num_lines) {
     Sys.sleep(0.25)
 
-    res <- mock_status(task_id, line_no, num_lines, error, cancel)
-    set_script_status(res$status)
+    res <- mock_status(task_id, line_no, num_lines, error)
 
     status <- res$status
     message <- res$message
@@ -84,13 +72,13 @@ run_job <- function(args) {
       res$started_at <- started_at
     }
 
-    if (is.null(running_at) && identical(status, "running")) {
+    if (is.null(running_at) && status %in% c("running", "cancelled", "completed")) {
       running_at <- format_utcnow()
       res$running_at <- running_at
       write_start <- TRUE
     }
 
-    if (status %in% c("canceled", "completed")) {
+    if (status %in% c("cancelled", "completed")) {
       result_file <- result_file_name(task_id, task_type, gen)
       if (identical(status, "completed") && length(errors) == 0) {
         result_info <- list(
@@ -143,7 +131,22 @@ blowup <- function() {
   stop("kaboom")
 }
 
-mock_status <- function(task_id, line_no, num_lines, error, cancel) {
+create_task <- function(args) {
+  res <- list(
+    session_id = args$session_id,
+    session_log_path = args$log_path,
+    task_id = args$task_id,
+    task_type = args$task_type,
+    gen = args$gen,
+    status = "created",
+    message = paste0("Task ", args$task_id, " created")
+  )
+
+  set_script_status("created")
+  res
+}
+
+mock_status <- function(task_id, line_no, num_lines, error) {
   raise_error <- FALSE
   progress_counter <- NULL
   progress_total <- NULL
@@ -166,15 +169,13 @@ mock_status <- function(task_id, line_no, num_lines, error, cancel) {
     if (line_no == 4) {
       if (identical(error, "running")) {
         raise_error <- TRUE
-      } else if (cancel) {
-        status <- "canceled"
-        errors <- paste0("canceled on line ", line_no)
       }
     }
   } else {
     status <- "completed"
     result <- list(params = list(list(a = 2), list(b = line_no)))
   }
+  set_script_status(status)
 
   if (!is.null(progress_counter) && !is.null(progress_total)) {
     progress <- list(
@@ -195,7 +196,6 @@ mock_status <- function(task_id, line_no, num_lines, error, cancel) {
   )
 
   if (raise_error) {
-    set_script_status(status)
     blowup_a()
   }
 
@@ -205,13 +205,13 @@ mock_status <- function(task_id, line_no, num_lines, error, cancel) {
 # Execution starts here
 
 args <- try_capture_stack(start_script())
-if (is(args, "error")) {
+if (inherits(args, "condition")) {
   # If there is an error, class(args) <- c("simpleError", "error", "condition")
   log_error(args, NULL)
 } else {
   res <- try_capture_stack(run_job(args))
   # If there is an error, class(res) <- c("simpleError", "error", "condition")
-  if (is(res, "error")) {
+  if (inherits(res, "condition")) {
     log_error(res, args)
   } else {
     res
