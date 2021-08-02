@@ -53,7 +53,7 @@ defmodule LogWatcher.MixProject do
       {:postgrex, "~> 0.15"},
       {:typed_struct, "~> 0.2"},
       # {:typed_struct_ecto_changeset, "~> 0.1"}
-      {:typed_struct_ecto_changeset, path: "/home/pzingg/Projects/elixir/typed_struct_ecto_changeset"}
+      {:typed_struct_ecto_changeset, git: "git://github.com/pzingg/typed_struct_ecto_changeset.git"}
     ]
   end
 
