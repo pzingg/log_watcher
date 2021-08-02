@@ -33,9 +33,7 @@ defmodule LogWatcher.FileWatcher do
   end
 
   defimpl String.Chars, for: LogWatcher.FileWatcher.WatchedFile do
-    def to_string(
-          %WatchedFile{stream: stream, position: position, start_sent: start_sent}
-        ) do
+    def to_string(%WatchedFile{stream: stream, position: position, start_sent: start_sent}) do
       "%LogWatcher.FileWatcher.WatchedFile{stream: #{stream.path}, position: #{position}, start_sent: #{
         start_sent
       }}"
@@ -57,6 +55,8 @@ defmodule LogWatcher.FileWatcher do
         }
 
   @type gproc_key :: {:n, :l, {:session_id, String.t()}}
+
+  @task_started_status ["running", "completed", "canceled"]
 
   @doc """
   Public interface. Subscribe to task messages, start the GenServer for a session,
@@ -281,9 +281,10 @@ defmodule LogWatcher.FileWatcher do
            last_modified: last_modified
          } = file
        ) do
+    # Don't check change in :mtime! Things can happen fast!
     with {:exists, true} <- {:exists, File.exists?(stream.path)},
          {:ok, stat} <- File.stat(stream.path),
-         {:mtime, true} <- {:mtime, stat.mtime != last_modified},
+         # {:mtime, true} <- {:mtime, stat.mtime != last_modified},
          {:size, true} <- {:size, stat.size >= size} do
       lines =
         stream
@@ -310,9 +311,9 @@ defmodule LogWatcher.FileWatcher do
         Logger.error("no increase in size")
         {[], %WatchedFile{file | stream: File.stream!(stream.path), position: 0, size: 0}}
 
-      {:mtime, _} ->
-        Logger.error("no change in mtime")
-        {[], file}
+      # {:mtime, _} ->
+      #  Logger.error("no change in mtime")
+      #  {[], file}
 
       {:error, reason} ->
         Logger.error("cannot stat #{stream.path}: #{inspect(reason)}")
@@ -333,7 +334,7 @@ defmodule LogWatcher.FileWatcher do
       Logger.info("acc #{acc} status #{info[:status]}")
 
       next_acc =
-        if !acc && info[:status] == "running" do
+        if !acc && Enum.member?(@task_started_status, info[:status]) do
           Session.broadcast(topic, {:task_started, file_name, info})
           true
         else

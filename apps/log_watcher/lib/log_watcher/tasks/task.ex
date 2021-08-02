@@ -89,6 +89,11 @@ defmodule LogWatcher.Tasks.Task do
     "#{log_prefix}-start.json"
   end
 
+  @spec result_file_name(String.t(), String.t(), integer()) :: String.t()
+  def result_file_name(task_id, task_type, gen) do
+    "#{make_log_prefix(task_id, task_type, gen)}-result.json"
+  end
+
   @spec result_file_name(t()) :: String.t()
   def result_file_name(%__MODULE__{log_prefix: log_prefix}) do
     "#{log_prefix}-result.json"

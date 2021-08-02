@@ -4,7 +4,7 @@ source("json_logging.R")
 source("script_startup.R")
 
 # These functions are defined in json_logging.R:
-# init_logging
+# setup_logging
 # set_script_status
 # format_utcnow
 # arg_file_name
@@ -12,52 +12,58 @@ source("script_startup.R")
 # result_file_name
 # log_event
 # log_res
-# maybe_log_error
+# log_error
 # read_arg_file
 # write_result_file
 # write_start_file
 
 # These functions are defined in script_startup.R:
-# script_startup
-
-setup_logging <- function(args) {
-  log_file <- log_file_name(args$task_id, args$task_type, args$gen)
-  log_file_path <- file.path(args$log_path, log_file)
-  init_logging(log_file_path)
-  cat(paste0("logging setup done, will append to ", log_file_path, "\n"))
-}
+# start_script
 
 run_job <- function(args) {
+  setup_logging(args)
+
+  session_id <- args$session_id
   session_log_path <- args$log_path
   task_id <- args$task_id
   task_type <- args$task_type
   gen <- args$gen
 
-  error <- ifelse(is.null(args$error), "", args$error)
+  error <- ifelse(is.null(args$error), "none", args$error)
   cancel <- args$cancel
   started_at <- NULL
   running_at <- NULL
   write_start <- FALSE
   write_result <- FALSE
 
-  cat(paste0("run_job: cancel ", cancel, " error ", error, "\n"))
-  cat("writing first log message\n")
-  info <- list(
+  jcat(paste0("run_job: cancel ", cancel, " error ", error, "\n"))
+  jcat("writing first log message\n")
+  res <- list(
+    session_id = session_id,
+    session_log_path = session_log_path,
+    task_id = task_id,
+    task_type = task_type,
+    gen = gen,
     status = "created",
     message = paste0("Task ", task_id, " created")
   )
-  set_script_status(info$status)
-  futile.logger::flog.info(info$message)
-  log_event("task_created", info)
-  cat("log file created\n")
+  set_script_status(res$status)
+  futile.logger::flog.info(res$message)
+  log_event("task_created", res)
+  jcat("log file created\n")
 
+  set_script_status("reading")
   arg_file <- arg_file_name(task_id, task_type, gen)
   arg_path <- file.path(session_log_path, arg_file)
+
+  if (identical(error, "reading")) {
+    blowup_a()
+  }
+
   res <- read_arg_file(arg_path)
   set_script_status(res$status)
-
   futile.logger::flog.info(res$message)
-  cat("read arg file\n")
+  jcat("read arg file\n")
 
   num_lines <- res$args$num_lines
   for (line_no in 1:num_lines) {
@@ -107,17 +113,17 @@ run_job <- function(args) {
     if (write_start) {
       start_file <- start_file_name(task_id, task_type, gen)
       write_start_file(start_file, res)
-      cat("wrote start\n")
+      jcat("wrote start\n")
       write_start <- FALSE
     }
 
     if (write_result && !is.null(result_file)) {
       write_result_file(result_file, res, result)
-      cat("wrote result\n")
+      jcat("wrote result\n")
     }
 
     log_res(message, res)
-    cat(paste0("wrote line ", line_no, "\n"))
+    jcat(paste0("wrote line ", line_no, "\n"))
 
     if (write_result) {
       break
@@ -180,22 +186,34 @@ mock_status <- function(task_id, line_no, num_lines, error, cancel) {
     progress <- NULL
   }
 
-  if (raise_error) {
-    blowup_a()
-  }
-
-  list(
+  res <- list(
     status = status,
     message = paste0("Task ", task_id, " ", status, " on line ", line_no),
     progress = progress,
     result = result,
     errors = errors
   )
+
+  if (raise_error) {
+    set_script_status(status)
+    blowup_a()
+  }
+
+  res
 }
 
 # Execution starts here
 
-args <- scriptStartup()
-setup_logging(args)
-res <- try_capture_stack(run_job(args))
-maybe_log_error(res, args)
+args <- try_capture_stack(start_script())
+if (is(args, "error")) {
+  # If there is an error, class(args) <- c("simpleError", "error", "condition")
+  log_error(args, NULL)
+} else {
+  res <- try_capture_stack(run_job(args))
+  # If there is an error, class(res) <- c("simpleError", "error", "condition")
+  if (is(res, "error")) {
+    log_error(res, args)
+  } else {
+    res
+  }
+}

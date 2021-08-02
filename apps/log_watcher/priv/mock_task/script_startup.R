@@ -1,24 +1,34 @@
 library(jsonlite, quietly = TRUE)
 library(argparser, quietly = TRUE)
 
+source("json_logging.R")
 
-#' Startup procedure for Rscript-based API
+#' Startup procedure for Rscript- or littler-based API
 #'
-#' \code{scriptStartup} parses command line arguments, creates the API context,
-#' writes out command line arguments to a JSON file, and sets
-#' up a path for the log file for the command script.
+#' \code{start_script} Loads libraries, parses command line arguments,
+#' and sets up R session options used by the logging system.
 #'
 #' @return A named list with these components:
-#'  \code{session} The session environment.
-#'  \code{commandId} The command ID parsed from the command line.
-#'  \code{logFile} The command's log file location on the file system.
-scriptStartup <- function() {
-  .loadLibraries()
+#'  \code{log_path} The directory for argument and log files on the file system.
+#'  \code{session_id} The session ID.
+#'  \code{task_id} The task (command) ID.
+#'  \code{task_type} The task type.
+#'  \code{gen} The generation number when the task is started.
+#'  \code{cancel} TRUE if the task is to be canceled (testing flag).
+#'  \code{error} A non-empty string naming a phase if the task is to raise an
+#'      error (testing flag).
+start_script <- function() {
+  # Used for logging--save important data in R options
+  # digits.secs for millisecond time formats
+  context <- list(
+    digits.secs = 3,
+    daptics_script_pid = Sys.getpid(),
+    daptics_script_status = "initializing"
+  )
+  options(context)
 
-  pa <- .getScriptPathAndArgs()
-
-  # Change to directory of script
-  setwd(dirname(pa$script))
+  # From here on out, we might expect errors
+  load_required_libraries()
 
   # Create a parser
   p <- argparser::arg_parser("daptics rscript")
@@ -30,11 +40,21 @@ scriptStartup <- function() {
   p <- argparser::add_argument(p, "--task-type", "task id", short = "t")
   p <- argparser::add_argument(p, "--gen", "gen", short = "g", type = "integer")
   p <- argparser::add_argument(p, "--cancel", "TRUE to generate canceled result", short = "c", type = "boolean", flag = TRUE)
-  p <- argparser::add_argument(p, "--error", "phase in which to generate error result", short = "e")
+  p <- argparser::add_argument(p, "--error", "phase in which to generate error result", short = "e", default = "none")
+
+  # Rscript function
+  pa <- script_path_and_argv()
+
+  # Change to directory of script
+  setwd(dirname(pa$script))
 
   # Parse the command line arguments
   args <- argparser::parse_args(p, argv = pa$argv)
-  cat("parsed script args\n")
+  if (identical(args$error, "initializing")) {
+    stop("arg-blowup")
+  } else {
+    jcat("parsed script args\n")
+  }
 
   stopifnot(length(args$log_path) == 1)
   stopifnot(length(args$session_id) == 1)
@@ -42,18 +62,14 @@ scriptStartup <- function() {
   stopifnot(length(args$task_type) == 1)
   stopifnot(length(args$gen) == 1)
 
-  # Save important data in R options
-  # digits.secs for millisecond time formats
+  # Save session and task data in R options
   context <- list(
-    digits.secs = 3,
     daptics_script_name = basename(pa$script),
     daptics_session_log_path = args$log_path,
     daptics_session_id = args$session_id,
     daptics_task_id = args$task_id,
     daptics_task_type = args$task_type,
-    daptics_task_gen = args$gen,
-    daptics_script_pid = Sys.getpid(),
-    daptics_script_status = "created"
+    daptics_task_gen = args$gen
   )
   options(context)
 
@@ -62,12 +78,12 @@ scriptStartup <- function() {
 
 #' Parse command line arguments from \code{Rscript} or \code{littler}.
 #'
-#' \code(getScriptPathAndArgs) accepts command line arguments from
+#' \code(script_path_and_argv) accepts command line arguments from
 #' either \code{Rscript} or \code{littler} runtimes, parses the "--file="
 #' argument, and returns that value, along with any "trailing" arguments.
 #'
 #' @return A named list with \code{script} and \code{argv} components.
-.getScriptPathAndArgs <- function() {
+script_path_and_argv <- function() {
   # With littler, argv is already parsed, and should be a character vector like:
   # [1] "--file=/home/pzingg/..."
   # [2] "-s"
@@ -103,8 +119,8 @@ scriptStartup <- function() {
   }
 
   # Get full path from "--file=xxx" argument
-  scriptPath <- gsub("--file=(.+)", "\\1", argv[m])
-  scriptPath <- normalizePath(scriptPath)
+  script_path <- gsub("--file=(.+)", "\\1", argv[m])
+  script_path <- normalizePath(script_path)
 
   # Now remove all but "trailing" args
   if (littler) {
@@ -122,18 +138,18 @@ scriptStartup <- function() {
   # [2] "S2kkmshsqwmkhhfb16fk"
   # [3] "-c"
   # [4] "C2kkmsjs57a10jvzx855"
-  list(script = scriptPath, argv = args)
+  list(script = script_path, argv = args)
 }
 
 # Load required libraries used for Rscripts
 # This is handled by rserve_preload.R in Rserve case
-.loadLibraries <- function() {
+load_required_libraries <- function() {
   return(TRUE)
 
   libraries <- c(
     "doParallel", "httr", "itertools",
     "jose", "openssl",
-    "parallel", "plyr", "R6", "synchronicity",
+    "parallel", "plyr", "R6", "rlist", "synchronicity",
     "sys", "tools", "ulid", "unix", "utils", "withr"
   )
 

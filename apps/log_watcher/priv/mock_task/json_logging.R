@@ -34,6 +34,7 @@ json_task_layout <- function(level, msg, id = "", ...) {
   if (is(msg, "condition")) {
     msg <- msg$message
   }
+  message <- paste(msg, collapse = "\n")
   message_data <- list(
     session_id = getOption("daptics_session_id"),
     session_log_path = getOption("daptics_session_log_path"),
@@ -44,10 +45,27 @@ json_task_layout <- function(level, msg, id = "", ...) {
     status = getOption("daptics_script_status"),
     time = format_utcnow(),
     level = level,
-    message = paste(msg, collapse = "\n"),
+    message = trimws(message),
     additional = ...
   )
-  paste0(jsonlite::toJSON(message_data,
+  to_json_line(message_data)
+}
+
+jcat <- function(message) {
+  if (is.character(message)) {
+    message_data <- list(
+      time = format_utcnow(),
+      message = trimws(message),
+      status = getOption("daptics_script_status")
+    )
+  } else {
+    message_data <- message
+  }
+  cat(to_json_line(message_data))
+}
+
+to_json_line <- function(data, append_newline = TRUE) {
+  line <- jsonlite::toJSON(data,
     Date = "ISO8601",
     POSIXt = "ISO8601",
     factor = "string",
@@ -55,7 +73,24 @@ json_task_layout <- function(level, msg, id = "", ...) {
     na = "null",
     auto_unbox = TRUE,
     pretty = FALSE
-  ), "\n")
+  )
+  if (append_newline) {
+    paste0(line, "\n")
+  } else {
+    line
+  }
+}
+
+to_pretty_json <- function(data) {
+  jsonlite::toJSON(data,
+    Date = "ISO8601",
+    POSIXt = "ISO8601",
+    factor = "string",
+    null = "null",
+    na = "null",
+    auto_unbox = TRUE,
+    pretty = TRUE
+  )
 }
 
 # Initialize futile.logger
@@ -65,7 +100,20 @@ init_logging <- function(log_file_path, level = futile.logger::INFO) {
   futile.logger::flog.threshold(level)
   futile.logger::flog.layout(json_task_layout)
   futile.logger::flog.appender(futile.logger::appender.file(log_file_path))
+
+  invisible(log_file_path)
 }
+
+setup_logging <- function(args) {
+  log_file <- log_file_name(args$task_id, args$task_type, args$gen)
+  log_file_path <- file.path(args$log_path, log_file)
+  init_logging(log_file_path)
+
+  jcat(paste0("logging setup done, will append to ", log_file_path, "\n"))
+
+  invisible(log_file_path)
+}
+
 
 set_script_status <- function(status) {
   options(daptics_script_status = status)
@@ -93,20 +141,22 @@ try_capture_stack <- function(expr, env = environment()) {
 }
 
 get_traceback <- function(err) {
-  # no expanded traceback
   if (inherits(err, "try-error")) {
+    # no expanded traceback
     condition <- attr(err, "condition")[["call"]]
-    list(
-      error = condition[["message"]],
-      call = as.character(condition[["call"]]),
-      traceback = list()
-    )
+    err_msg <- condition[["message"]]
+    call_msg <- condition[["call"]]
+    stack_msg <- list()
   } else {
     err_msg <- err$message
-    stack_msg <- lapply(err$calls, function(x) utils::capture.output(print(x)))
     call_msg <- utils::capture.output(print(err$call))
-    list(error = err_msg, call = call_msg, traceback = stack_msg)
+    stack_msg <- lapply(err$calls, function(x) utils::capture.output(print(x)))
   }
+  list(
+    error = as.character(err_msg),
+    call = as.character(call_msg),
+    traceback = stack_msg
+  )
 }
 
 make_error_list <- function(errors, system = TRUE, fatal = TRUE) {
@@ -147,21 +197,11 @@ result_file_name <- function(task_id, task_type, gen) {
 ## Main logging functions
 
 log_event <- function(event_type, info) {
-  event <- create_event(event_type, info)
-  contents <- jsonlite::toJSON(event,
-    Date = "ISO8601",
-    POSIXt = "ISO8601",
-    factor = "string",
-    null = "null",
-    na = "null",
-    auto_unbox = TRUE,
-    pretty = FALSE
-  )
-
-  event_file <- session_log_file_name(event$session_id)
-  path <- file.path(event$session_log_path, event_file)
+  event_file <- session_log_file_name(info$session_id)
+  path <- file.path(info$session_log_path, event_file)
   con <- file(path, open = "at")
-  writeLines(contents, con = con)
+  event <- create_event(event_type, info)
+  writeLines(to_json_line(event, append_newline = FALSE), con = con)
   flush(con)
   close(con)
   con <- NULL
@@ -199,35 +239,41 @@ log_res <- function(message, res, level = "INFO") {
   do.call(log_fn, logger_args)
 }
 
-maybe_log_error <- function(res, args) {
-  # If there is an error, class(res) <- c("simpleError", "error", "condition")
-  if (is(res, "error")) {
-    trace <- get_traceback(res)
-    cat(paste0("maybe_log_error: ", trace$error, "\n"))
+log_error <- function(error, args) {
+  trace <- get_traceback(error)
+  message <- trimws(trace$error)
 
+  if (is.null(args)) {
+    result_file <- NULL
+  } else {
     result_file <- result_file_name(args$task_id, args$task_type, args$gen)
-    result_info <- list(
-      succeeded = FALSE,
-      file = result_file,
-      errors = make_error_list(trace$error)
-    )
-    info <- list(
-      result = result_info,
-      call = trace$call,
-      traceback = trace$traceback
-    )
-    write_result_file(result_file, info, NULL)
+  }
 
+  result_info <- list(
+    succeeded = FALSE,
+    file = result_file,
+    errors = make_error_list(message)
+  )
+
+  info <- list(
+    message = message,
+    result = result_info,
+    call = trace$call,
+    traceback = trace$traceback
+  )
+
+  if (is.null(result_file)) {
+    # Error occurred before args were correctly parsed.
+    jcat(info)
+  } else {
+    write_result_file(result_file, info, NULL)
     res <- list(
       completed_at = format_utcnow(),
       result = result_info
     )
-    log_res(trace$error, res, level = "ERROR")
-
-    trace$error
-  } else {
-    res
+    log_res(message, res, level = "ERROR")
   }
+  message
 }
 
 read_arg_file <- function(arg_path) {
@@ -254,7 +300,7 @@ read_arg_file <- function(arg_path) {
   args["gen"] <- NULL
 
   list(
-    status = "input",
+    status = "validating",
     message = paste0("Task ", task_id, " parsed ", length(args), " args"),
     args = args
   )
@@ -268,17 +314,8 @@ write_start_file <- function(start_file, info) {
   info$task_type <- getOption("daptics_task_type")
   info$gen <- getOption("daptics_task_gen")
   info$os_pid <- getOption("daptics_script_pid")
-  contents <- jsonlite::toJSON(info,
-    Date = "ISO8601",
-    POSIXt = "ISO8601",
-    factor = "string",
-    null = "null",
-    na = "null",
-    auto_unbox = TRUE,
-    pretty = TRUE
-  )
   path <- file.path(info$session_log_path, start_file)
-  write(contents, file = path)
+  cat(to_pretty_json(info), file = path)
 
   log_event("task_started", info)
 }
@@ -306,17 +343,8 @@ write_result_file <- function(result_file, info, result_data) {
     errors = info$result$errors,
     data = result_data
   )
-  contents <- jsonlite::toJSON(info,
-    Date = "ISO8601",
-    POSIXt = "ISO8601",
-    factor = "string",
-    null = "null",
-    na = "null",
-    auto_unbox = TRUE,
-    pretty = TRUE
-  )
   path <- file.path(info$session_log_path, result_file)
-  write(contents, file = path)
+  cat(to_pretty_json(info), file = path)
 
   event_type <- paste0("task_", info$status)
   info$result <- saved_result

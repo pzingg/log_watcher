@@ -6,6 +6,14 @@ defmodule LogWatcher.TaskStarter do
   alias LogWatcher.{FileWatcher, Tasks}
   alias LogWatcher.Tasks.{Session, Task}
 
+  @info_keys [
+    :session_id,
+    :session_log_path,
+    :task_id,
+    :task_type,
+    :gen
+  ]
+
   # To start a job
   # %{id: 100, session_id: "S2", session_log_path: "path_to_output",
   #    task_id: task_id, task_type: "update", gen: 2}
@@ -60,6 +68,8 @@ defmodule LogWatcher.TaskStarter do
     {:discard, "Not a task job"}
   end
 
+  @default_script_timeout 120_000
+
   @doc """
   Note: task_args must have string keys!
   """
@@ -73,6 +83,7 @@ defmodule LogWatcher.TaskStarter do
       ) do
     log_file = Task.log_file_name(task_id, task_type, gen)
     script_file = Map.fetch!(task_args, "script_file")
+    script_timeout = Map.get(task_args, "script_timeout", @default_script_timeout)
 
     executable =
       if String.ends_with?(script_file, ".R") do
@@ -125,7 +136,8 @@ defmodule LogWatcher.TaskStarter do
     # Process incoming messages to find a result
     Logger.info("job #{task_id}: script task ref is #{inspect(script_task.ref)}")
     Logger.info("job #{task_id}: process messages until :task_started is received")
-    result = loop(task_id, script_task)
+    expiry = System.monotonic_time(:millisecond) + script_timeout
+    result = loop(task_id, script_task, expiry)
 
     # Return disposition for Oban
     Logger.info("job #{task_id}: result is #{inspect(result)}")
@@ -149,11 +161,16 @@ defmodule LogWatcher.TaskStarter do
     end
   end
 
-  @spec yield_or_shutdown_task(Elixir.Task.t(), integer()) :: {:ok, term()} | {:error, :timeout}
+  @spec yield_or_shutdown_task(Elixir.Task.t(), integer()) ::
+          :ok | {:ok, term()} | {:error, :timeout}
   def yield_or_shutdown_task(task, timeout) do
     Logger.info("#{inspect(self())} yielding to script task...")
 
     case Elixir.Task.yield(task, timeout) || Elixir.Task.shutdown(task) do
+      {:ok, :ok} ->
+        Logger.info("after yield, script task returned :ok")
+        :ok
+
       {:ok, result} ->
         Logger.info("after yield, script task returned #{inspect(result)}")
         {:ok, result}
@@ -219,25 +236,54 @@ defmodule LogWatcher.TaskStarter do
     Logger.info("job #{task_id}: script exited with #{exit_status}")
     Logger.info("job #{task_id}: output from script: #{inspect(output)}")
 
-    if exit_status == 0 do
-      :ok
-    else
-      Session.events_topic(session_id)
-      |> Session.broadcast({:script_error, exit_status, output})
+    info =
+      json_encode_decode(start_args, :atoms)
+      |> Enum.filter(fn {key, _value} -> Enum.member?(@info_keys, key) end)
+      |> Map.new()
 
-      {:error, exit_status}
-    end
+    parse_script_output(info, output, exit_status)
   end
 
-  @spec loop(String.t(), Elixir.Task.t()) ::
+  @spec loop(String.t(), Elixir.Task.t(), integer()) ::
           {:ok, map()}
           | {:error,
              {:script_terminated, term()}
-             | {:script_error, integer()}
              | {:script_crashed, term()}
              | :timeout}
-  def loop(task_id, %Elixir.Task{ref: task_ref, pid: _task_pid} = task) do
+  @doc """
+  Wait for messages from the log watching process.
+
+  Returns `{:ok, result}` if the task entered the running phase without errors.
+  The `result` is a map that contains information about the task,
+  and `result.script_task` is an Elixir Task struct.
+
+  Returns `{:error, {:script_error, exit_status}}` if the shell script called
+  by the Elixir Task exited with a non-zero exit status, before it
+  entered the start phase.
+
+  Returns `{:error, :script_terminated}` or `
+  {:error, {:script_terminated, reason}}` if the Elixir Task ended
+  normally before it entered the running phase. `reason` is the value returned
+  by the Task.
+
+  Returns `{:error, {:script_crashed, reason}}` if the Elixir Task ended
+  abnormally before it entered the running phase. `reason` is the value returned
+  by the Task.
+
+  Returns `{:error, :timeout}` if the script never received a "task started"
+  message or termination message before the timeout period.
+  """
+  def loop(task_id, %Elixir.Task{ref: task_ref, pid: _task_pid} = task, expiry) do
     Logger.info("job #{task_id}: re-entering loop")
+
+    time_now = System.monotonic_time(:millisecond)
+
+    time_left =
+      if expiry <= time_now do
+        0
+      else
+        expiry - time_now
+      end
 
     receive do
       {:task_started, file_name, info} ->
@@ -246,18 +292,16 @@ defmodule LogWatcher.TaskStarter do
         Logger.info("job #{task_id}, loop returning :ok #{inspect(result)}")
         {:ok, result}
 
-      {^task_ref, task_result} ->
+      {:script_terminated, info} ->
+        Logger.error("job #{task_id}, loop received :script_terminated, #{inspect(info)}")
+        result = Map.merge(info, %{script_task: nil})
+        Logger.info("job #{task_id}, loop returning :ok #{inspect(result)}")
+        {:ok, result}
+
+      {^task_ref, result} ->
         Logger.error("job #{task_id}, loop received task result for #{inspect(task_ref)}")
         Logger.info("job #{task_id}, loop returning :script_terminated")
-        {:error, {:script_terminated, task_result}}
-
-      {:script_error, exit_status, output} ->
-        Logger.error(
-          "job #{task_id}, loop received :script_error, status #{exit_status} output #{output}"
-        )
-
-        Logger.info("job #{task_id}, loop returning :script_error")
-        {:error, {:script_error, exit_status}}
+        {:error, {:script_terminated, result}}
 
       {:DOWN, ^task_ref, :process, _pid, reason} ->
         Logger.error("job #{task_id}, loop received :DOWN")
@@ -266,16 +310,51 @@ defmodule LogWatcher.TaskStarter do
 
       {:task_updated, file_name, _info} ->
         Logger.info("job #{task_id}, loop received :task_updated on #{file_name}")
-        loop(task_id, task)
+        loop(task_id, task, expiry)
 
       other ->
         Logger.info("job #{task_id}, loop received #{inspect(other)}")
-        loop(task_id, task)
+        loop(task_id, task, expiry)
     after
-      120_000 ->
+      time_left ->
         Logger.error("job #{task_id}: loop timed out")
         {:error, :timeout}
     end
+  end
+
+  @spec parse_script_output(map(), String.t(), integer()) :: map()
+  defp parse_script_output(info, output, exit_status) do
+    payload =
+      case String.split(output, "\n") |> get_last_json_line() do
+        nil ->
+          info
+          |> Map.put(:message, output)
+          |> Map.put(:status, "completed")
+          |> Map.put(:exit_status, exit_status)
+
+        data ->
+          info
+          |> Map.merge(data)
+          |> Map.put(:status, "completed")
+          |> Map.put(:exit_status, exit_status)
+      end
+
+    Session.events_topic(info.session_id)
+    |> Session.broadcast({:script_terminated, payload})
+
+    payload
+  end
+
+  defp get_last_json_line(lines) do
+    Enum.reduce(lines, nil, fn line, acc ->
+      case Jason.decode(line, keys: :atoms) do
+        {:ok, data} when is_map(data) ->
+          data
+
+        _ ->
+          acc
+      end
+    end)
   end
 
   @doc """
@@ -283,10 +362,10 @@ defmodule LogWatcher.TaskStarter do
   Converts all atomic keys to strings, and verifies
   that args are JSON-encodable.
   """
-  @spec json_encode_decode(map()) :: map()
-  def json_encode_decode(map) do
+  @spec json_encode_decode(map(), atom()) :: map()
+  def json_encode_decode(map, key_type) do
     map
     |> Jason.encode!()
-    |> Jason.decode!()
+    |> Jason.decode!(keys: key_type)
   end
 end
