@@ -3,6 +3,8 @@
 LogWatcher application shows how to use inotify-type tools to monitor 
 JSON-formatted log files to monitor long-running tasks.
 
+Please see [apps/log_watcher/README.md](apps/log_watcher/README.md) for detailed information.
+
 
 ## Installation
 
