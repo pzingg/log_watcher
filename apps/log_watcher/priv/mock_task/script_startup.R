@@ -147,7 +147,7 @@ load_required_libraries <- function() {
   libraries <- c(
     "doParallel", "httr", "itertools",
     "jose", "openssl",
-    "parallel", "plyr", "R6", "rlist", "synchronicity",
+    "parallel", "plyr", "R6", "synchronicity",
     "sys", "tools", "ulid", "unix", "utils", "withr"
   )
 

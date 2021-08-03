@@ -1,6 +1,6 @@
 library(futile.logger, quietly = TRUE)
 library(jsonlite, quietly = TRUE)
-library(rlist, quietly = TRUE)
+library(utils, quietly = TRUE)
 
 ## JSON logging for futile.logger
 
@@ -234,7 +234,7 @@ create_event <- function(event_type, info) {
     event_type = event_type,
     time = format_utcnow()
   )
-  rlist::list.merge(event, info)
+  utils::modifyList(event, info)
 }
 
 log_res <- function(message, res, level = "INFO") {
