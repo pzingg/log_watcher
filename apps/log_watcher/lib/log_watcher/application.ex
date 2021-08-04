@@ -11,6 +11,8 @@ defmodule LogWatcher.Application do
       LogWatcher.Repo,
       # Monitor long running scripts via Elixir Tasks.
       {Elixir.Task.Supervisor, name: LogWatcher.TaskSupervisor},
+      # Monitor jobs started by Oban
+      {LogWatcher.TaskMonitor, name: LogWatcher.TaskMonitor},
       # Start the PubSub system
       {Phoenix.PubSub, name: LogWatcher.PubSub},
       # Run jobs via a PostgreSQL database

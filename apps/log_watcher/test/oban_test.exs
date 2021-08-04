@@ -9,6 +9,7 @@ defmodule LogWatcher.MockTaskTest do
   @oban_exec_timeout 30_000
   @script_timeout 10_000
 
+  @tag :skip
   @tag :start_oban
   test "01 queues and runs an Oban job", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
@@ -45,6 +46,7 @@ defmodule LogWatcher.MockTaskTest do
     Process.sleep(@script_timeout)
   end
 
+  @tag :skip
   @tag :start_oban
   test "02 runs a mock task under Oban", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
@@ -87,6 +89,7 @@ defmodule LogWatcher.MockTaskTest do
     Process.sleep(1_000)
     Logger.error("canceling job...")
     :ok = Oban.cancel_job(job_id)
+    LogWatcher.TaskMonitor.kill_oban_worker(job_id, :oban_cancel)
 
     {:ok, info} = wait_for_job_state(job_id, :cancelled, expiry)
     # assert Enum.empty?(info.running)
@@ -99,7 +102,7 @@ defmodule LogWatcher.MockTaskTest do
   @spec wait_for_job_state(String.t(), atom(), integer()) ::
           {:ok, map()} | {:error, atom() | {:timeout, atom()}}
   defp wait_for_job_state(job_id, wait_for_state, expiry) do
-    now = System.monotonic_time(:millisecond)
+    time_now = System.monotonic_time(:millisecond)
 
     %Oban.Job{state: state_str, queue: "tasks"} = LogWatcher.Repo.get!(Oban.Job, job_id)
 
@@ -108,9 +111,7 @@ defmodule LogWatcher.MockTaskTest do
     if state == wait_for_state do
       {:ok, Oban.check_queue(queue: :tasks)}
     else
-      if now > expiry do
-        {:error, {:timeout, state}}
-      else
+      if time_now <= expiry do
         case state do
           :available ->
             Process.sleep(1_000)
@@ -123,6 +124,8 @@ defmodule LogWatcher.MockTaskTest do
           _ ->
             {:error, state}
         end
+      else
+        {:error, {:timeout, state}}
       end
     end
   end

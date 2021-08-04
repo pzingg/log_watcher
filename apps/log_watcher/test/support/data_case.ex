@@ -124,14 +124,14 @@ defmodule LogWatcher.DataCase do
 
   @spec wait_on_proc_file_until(String.t(), integer()) :: :ok | {:error, :timeout}
   def wait_on_proc_file_until(proc_file, expiry) do
-    now = System.monotonic_time()
+    time_now = System.monotonic_time()
     Process.sleep(1)
 
     if File.exists?(proc_file) do
-      if expiry < now do
-        {:error, :timeout}
-      else
+      if time_now <= expiry do
         wait_on_proc_file_until(proc_file, expiry)
+      else
+        {:error, :timeout}
       end
     else
       :ok

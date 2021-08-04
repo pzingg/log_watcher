@@ -40,15 +40,15 @@ defmodule LogWatcher.FileWatcher do
     end
   end
 
-  @enforce_keys [:watcher_pid, :session_id, :session_log_path]
+  @enforce_keys [:fs_pid, :session_id, :session_log_path]
 
-  defstruct watcher_pid: nil,
+  defstruct fs_pid: nil,
             session_id: nil,
             session_log_path: nil,
             files: %{}
 
   @type state :: %__MODULE__{
-          watcher_pid: pid(),
+          fs_pid: pid(),
           session_id: String.t(),
           session_log_path: String.t(),
           files: map()
@@ -67,9 +67,9 @@ defmodule LogWatcher.FileWatcher do
   @spec start_link_and_watch_file(String.t(), String.t(), String.t()) :: :ok
   def start_link_and_watch_file(session_id, session_log_path, log_file) do
     with :ok <- Session.events_topic(session_id) |> Session.subscribe(),
-         {:ok, _watcher_pid} <- start_or_find_link(session_id, session_log_path),
+         {:ok, pid} <- start_or_find_link(session_id, session_log_path),
          {:ok, _file} <- add_watch(session_id, log_file) do
-      :ok
+      {:ok, pid}
     end
   end
 
@@ -92,7 +92,7 @@ defmodule LogWatcher.FileWatcher do
   """
   @spec start_link(String.t(), String.t()) :: GenServer.on_start()
   def start_link(session_id, session_log_path) do
-    Logger.info("start_link #{session_id} #{session_log_path}")
+    Logger.info("FileWatcher start_link #{session_id} #{session_log_path}")
     GenServer.start_link(__MODULE__, [session_id, session_log_path], name: via_tuple(session_id))
   end
 
@@ -109,7 +109,7 @@ defmodule LogWatcher.FileWatcher do
   """
   @spec add_watch(String.t(), String.t()) :: {:ok, String.t()}
   def add_watch(session_id, file_name) do
-    Logger.info("add_watch #{session_id} #{file_name}")
+    Logger.info("FileWatcher add_watch #{session_id} #{file_name}")
     GenServer.call(via_tuple(session_id), {:add_watch, file_name})
   end
 
@@ -151,16 +151,16 @@ defmodule LogWatcher.FileWatcher do
   @impl true
   @spec init(term()) :: {:ok, state()}
   def init([session_id, session_log_path]) do
-    Logger.info("init #{session_id} #{session_log_path}")
+    Logger.info("FileWatcher init #{session_id} #{session_log_path}")
 
     args = [dirs: [session_log_path], recursive: false]
-    Logger.info("start FileSystem link with #{inspect(args)}")
+    Logger.info("FileWatcher start FileSystem link with #{inspect(args)}")
 
-    {:ok, watcher_pid} = FileSystem.start_link(args)
-    FileSystem.subscribe(watcher_pid)
+    {:ok, fs_pid} = FileSystem.start_link(args)
+    FileSystem.subscribe(fs_pid)
 
     initial_state = %__MODULE__{
-      watcher_pid: watcher_pid,
+      fs_pid: fs_pid,
       session_id: session_id,
       session_log_path: session_log_path
     }
@@ -198,7 +198,7 @@ defmodule LogWatcher.FileWatcher do
       ) do
     file = WatchedFile.new(session_log_path, file_name)
     next_file = check_for_lines(session_id, file)
-    Logger.info("watch added for #{file_name}")
+    Logger.info("FileWatcher watch added for #{file_name}")
     next_state = %__MODULE__{state | files: Map.put_new(files, file_name, next_file)}
     {:reply, {:ok, file_name}, next_state}
   end
@@ -224,10 +224,10 @@ defmodule LogWatcher.FileWatcher do
 
   @impl true
   def handle_info(
-        {:file_event, watcher_pid, {path, events}},
-        %__MODULE__{watcher_pid: watcher_pid, session_id: session_id, files: files} = state
+        {:file_event, fs_pid, {path, events}},
+        %__MODULE__{fs_pid: fs_pid, session_id: session_id, files: files} = state
       ) do
-    Logger.info("#{inspect(watcher_pid)} #{path}: #{inspect(events)}")
+    # Logger.info("FileWatcher #{inspect(fs_pid)} #{path}: #{inspect(events)}")
 
     file_name = Path.basename(path)
 
@@ -238,7 +238,6 @@ defmodule LogWatcher.FileWatcher do
       %WatchedFile{} = file ->
         next_state =
           if Enum.member?(events, :modified) do
-            Logger.error("got :modified event for #{file_name}")
             next_file = check_for_lines(session_id, file)
             %__MODULE__{state | files: Map.put(files, file_name, next_file)}
           else
@@ -250,10 +249,10 @@ defmodule LogWatcher.FileWatcher do
   end
 
   def handle_info(
-        {:file_event, watcher_pid, :stop},
-        %__MODULE__{watcher_pid: watcher_pid} = state
+        {:file_event, fs_pid, :stop},
+        %__MODULE__{fs_pid: fs_pid} = state
       ) do
-    Logger.info("#{inspect(watcher_pid)} :stop")
+    Logger.info("FileWatcher #{inspect(fs_pid)} :stop")
     {:stop, :normal, state}
   end
 
@@ -296,19 +295,19 @@ defmodule LogWatcher.FileWatcher do
       handle_lines(session_id, next_file, lines)
     else
       {:exists, _} ->
-        Logger.error("WatchedFile #{stream.path} does not exist")
+        # Logger.error("FileWatcher #{stream.path} does not exist")
         %WatchedFile{file | stream: File.stream!(stream.path), position: 0, size: 0}
 
       {:size, _} ->
-        Logger.error("no increase in size")
+        Logger.error("FileWatcher no increase in size")
         %WatchedFile{file | stream: File.stream!(stream.path), position: 0, size: 0}
 
       # {:mtime, _} ->
-      #  Logger.error("no change in mtime")
+      #  Logger.error("FileWatcher no change in mtime")
       #  file
 
       {:error, reason} ->
-        Logger.error("cannot stat #{stream.path}: #{inspect(reason)}")
+        Logger.error("FileWatcher cannot stat #{stream.path}: #{inspect(reason)}")
         %WatchedFile{file | stream: File.stream!(stream.path), position: 0, size: 0}
     end
   end
@@ -319,13 +318,15 @@ defmodule LogWatcher.FileWatcher do
   defp handle_lines(session_id, %WatchedFile{stream: stream} = file, lines) do
     file_name = Path.basename(stream.path)
 
-    Logger.info("file #{file_name} got #{Enum.count(lines)} lines")
+    Logger.info("FileWatcher got #{Enum.count(lines)} line(s) from #{file_name}")
 
     topic = Session.events_topic(session_id)
 
     Enum.reduce(lines, file, fn line, %WatchedFile{start_sent: start_sent} = acc ->
       %{status: status} = info = Jason.decode!(line, keys: :atoms)
-      Logger.info("start_sent #{start_sent} status #{info[:status]}")
+      # Logger.info("FileWatcher start_sent #{start_sent} status #{info[:status]}")
+
+      Session.broadcast(topic, {:task_updated, file_name, info})
 
       next_acc =
         if !start_sent && Enum.member?(@task_started_status, status) do
@@ -334,8 +335,6 @@ defmodule LogWatcher.FileWatcher do
         else
           acc
         end
-
-      Session.broadcast(topic, {:task_updated, file_name, info})
 
       if Enum.member?(@task_completed_status, status) do
         Session.broadcast(topic, {:task_completed, file_name})

@@ -6,6 +6,26 @@ defmodule LogWatcher.TaskStarter do
   alias LogWatcher.{FileWatcher, Tasks}
   alias LogWatcher.Tasks.{Session, Task}
 
+  defmodule LoopTaskInfo do
+    @enforce_keys [:task_id, :elixir_task, :cancel_test, :job_id, :expiry]
+
+    defstruct task_id: nil,
+              elixir_task: nil,
+              cancel_test: false,
+              job_id: 0,
+              os_pid: 0,
+              expiry: 0
+
+    @type t() :: %__MODULE__{
+            task_id: String.t(),
+            elixir_task: Elixir.Task.t(),
+            cancel_test: boolean(),
+            job_id: integer(),
+            os_pid: integer(),
+            expiry: integer()
+          }
+  end
+
   @info_keys [
     :session_id,
     :session_log_path,
@@ -44,7 +64,9 @@ defmodule LogWatcher.TaskStarter do
           "task_args" => task_args
         }
       }) do
+    Process.flag(:trap_exit, true)
     Logger.error("perform job #{job_id} task_id #{task_id}")
+    Logger.error("worker pid is #{inspect(self())}")
 
     gen =
       if is_binary(gen_arg) do
@@ -54,7 +76,7 @@ defmodule LogWatcher.TaskStarter do
       end
 
     Tasks.create_session!(session_id, name, description, session_log_path, gen)
-    |> watch_and_run(task_id, task_type, task_args)
+    |> watch_and_run(task_id, task_type, Map.put(task_args, "oban_job_id", job_id))
   end
 
   def perform(%Oban.Job{id: job_id, args: args}) do
@@ -92,19 +114,19 @@ defmodule LogWatcher.TaskStarter do
     end
 
     # Set up to receive messages
-    Logger.info(
-      "job #{task_id}: pid is #{inspect(self())}, start watching #{log_file} in #{
-        session_log_path
-      }"
-    )
+    job_id = Map.get(task_args, "oban_job_id", 0)
+    cancel_test = Map.get(task_args, "cancel_test", false)
+    script_timeout = Map.get(task_args, "script_timeout", @default_script_timeout)
 
-    link_result = FileWatcher.start_link_and_watch_file(session_id, session_log_path, log_file)
+    Logger.info("task #{task_id}: job_id #{job_id}, cancel_test #{cancel_test}, pid is #{inspect(self())}")
+    Logger.info("task #{task_id}: start watching #{log_file} in #{session_log_path}")
 
-    Logger.info("job #{task_id}: watcher is #{inspect(link_result)}")
+    {:ok, watcher_pid} =
+      FileWatcher.start_link_and_watch_file(session_id, session_log_path, log_file)
+
+    Logger.info("task #{task_id}: watcher is #{inspect(watcher_pid)}")
 
     # Write arg file
-    arg_path = Path.join(session_log_path, Task.arg_file_name(task_id, task_type, gen))
-
     start_args =
       Map.merge(task_args, %{
         "session_id" => session_id,
@@ -115,31 +137,43 @@ defmodule LogWatcher.TaskStarter do
       })
       |> Map.put_new("num_lines", 10)
 
-    Logger.info("job #{task_id}: write arg file to #{arg_path}")
+    arg_path = Path.join(session_log_path, Task.arg_file_name(task_id, task_type, gen))
+    Logger.info("task #{task_id}: write arg file to #{arg_path}")
+
     :ok = Tasks.write_arg_file(arg_path, start_args)
 
-    script_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", script_file])
-
-    Logger.info("job #{task_id}: run mock script at #{script_path}")
-
     # Start mock task script
+    script_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", script_file])
+    Logger.info("task #{task_id}: run mock script at #{script_path}")
+
+    # TODO: support cancellation from oban {:EXIT, :oban_cancel}
+    # monitor self(), script_task.pid, or watcher_pid?
+    # change script task to a GenServer, so it can handle :EXIT message?
     script_task =
       Elixir.Task.Supervisor.async_nolink(LogWatcher.TaskSupervisor, fn ->
         run_mock(executable, script_path, start_args)
       end)
 
-    # Process incoming messages to find a result
-    script_timeout = Map.get(task_args, "script_timeout", @default_script_timeout)
-    expiry = System.monotonic_time(:millisecond) + script_timeout
-    cancel_test = Map.get(task_args, "cancel_test", false)
+    if job_id != 0 do
+      LogWatcher.TaskMonitor.monitor_oban_worker(script_task.pid, job_id, task_id)
+    end
 
-    Logger.info("job #{task_id}: script task ref is #{inspect(script_task.ref)}")
-    Logger.info("job #{task_id}: process messages until :task_started is received")
-    Logger.info("job #{task_id}: cancel_test is #{cancel_test}")
-    result = loop(task_id, script_task, cancel_test, expiry)
+    # Process incoming messages to find a result
+    Logger.info("task #{task_id}: script task ref is #{inspect(script_task.ref)}")
+    Logger.error("task #{task_id}: starting loop")
+
+    task_info = %LoopTaskInfo{
+      job_id: job_id,
+      task_id: task_id,
+      elixir_task: script_task,
+      cancel_test: cancel_test,
+      expiry: System.monotonic_time(:millisecond) + script_timeout
+    }
+
+    result = loop(task_info)
 
     # Return disposition for Oban
-    Logger.info("job #{task_id}: result is #{inspect(result)}")
+    Logger.error("task #{task_id}: exited loop, result is #{inspect(result)}")
 
     # Oban.Worker.perform return values:
     # :ok or {:ok, value} — the job is successful; for success tuples the
@@ -197,7 +231,7 @@ defmodule LogWatcher.TaskStarter do
           "gen" => gen
         } = start_args
       ) do
-    Logger.info("job #{task_id}: start_args #{inspect(start_args)}")
+    Logger.info("task #{task_id}: start_args #{inspect(start_args)}")
 
     basic_args = [
       "--log-path",
@@ -224,13 +258,15 @@ defmodule LogWatcher.TaskStarter do
           basic_args
       end
 
-    Logger.info("job #{task_id}: shelling out to #{executable} with args #{inspect(script_args)}")
+    Logger.info(
+      "task #{task_id}: shelling out to #{executable} with args #{inspect(script_args)}"
+    )
 
     {output, exit_status} =
       System.cmd(executable, [script_path | script_args], cd: Path.dirname(script_path))
 
-    Logger.info("job #{task_id}: script exited with #{exit_status}")
-    Logger.info("job #{task_id}: output from script: #{inspect(output)}")
+    Logger.info("task #{task_id}: script exited with #{exit_status}")
+    Logger.info("task #{task_id}: output from script: #{inspect(output)}")
 
     info =
       json_encode_decode(start_args, :atoms)
@@ -240,10 +276,11 @@ defmodule LogWatcher.TaskStarter do
     parse_script_output(info, output, exit_status)
   end
 
-  @spec loop(String.t(), Elixir.Task.t(), boolean(), integer()) ::
+  @spec loop(LoopTaskInfo.t()) ::
           {:ok, map()}
           | {:error,
-             {:script_terminated, term()}
+             {:EXIT, pid(), atom()}
+             | {:script_terminated, term()}
              | {:script_crashed, term()}
              | :timeout}
   @doc """
@@ -252,6 +289,10 @@ defmodule LogWatcher.TaskStarter do
   Returns `{:ok, result}` if the task entered the running phase without errors.
   The `result` is a map that contains information about the task,
   and `result.script_task` is an Elixir Task struct.
+
+  Returns `{:error, {:EXIT, pid, reason}}` if our process was sent an
+  abnormal exit message, perhaps by an `Oban.cancel_job/1` request,
+  in which case the reason will be `:oban_cancel`.
 
   Returns `{:error, {:script_error, exit_status}}` if the shell script called
   by the Elixir Task exited with a non-zero exit status, before it
@@ -269,60 +310,82 @@ defmodule LogWatcher.TaskStarter do
   Returns `{:error, :timeout}` if the script never received a "task started"
   message or termination message before the timeout period.
   """
-  def loop(task_id, %Elixir.Task{ref: task_ref, pid: _task_pid} = task, cancel_test, expiry) do
-    Logger.info("job #{task_id}: re-entering loop")
-
+  def loop(
+        %LoopTaskInfo{
+          task_id: task_id,
+          elixir_task: %Elixir.Task{ref: task_ref} = task,
+          cancel_test: cancel_test,
+          expiry: expiry
+        } = info
+      ) do
     time_now = System.monotonic_time(:millisecond)
-
-    time_left =
-      if expiry <= time_now do
-        0
-      else
-        expiry - time_now
-      end
+    time_left = max(0, expiry - time_now)
 
     receive do
       {:task_started, file_name, info} ->
-        Logger.info("job #{task_id}, loop received :task_started on #{file_name}")
+        Logger.info("task #{task_id}, loop received :task_started on #{file_name}")
         result = Map.merge(info, %{script_task: task})
-        Logger.info("job #{task_id}, loop returning :ok #{inspect(result)}")
+        Logger.info("task #{task_id}, loop returning :ok #{inspect(result)}")
         {:ok, result}
 
       {:script_terminated, info} ->
-        Logger.error("job #{task_id}, loop received :script_terminated, #{inspect(info)}")
+        Logger.error("task #{task_id}, loop received :script_terminated, #{inspect(info)}")
         result = Map.merge(info, %{script_task: nil})
-        Logger.info("job #{task_id}, loop returning :ok #{inspect(result)}")
+        Logger.info("task #{task_id}, loop returning :ok #{inspect(result)}")
         {:ok, result}
 
       {^task_ref, result} ->
-        Logger.error("job #{task_id}, loop received task result for #{inspect(task_ref)}")
-        Logger.info("job #{task_id}, loop returning :script_terminated")
+        Logger.error("task #{task_id}, loop received task result for #{inspect(task_ref)}")
+        Logger.info("task #{task_id}, loop returning :script_terminated")
         {:error, {:script_terminated, result}}
 
       {:DOWN, ^task_ref, :process, _pid, reason} ->
-        Logger.error("job #{task_id}, loop received :DOWN")
-        Logger.info("job #{task_id}, loop returning :script_crashed")
+        Logger.error("task #{task_id}, loop received :DOWN")
+        Logger.info("task #{task_id}, loop returning :script_crashed")
         {:error, {:script_crashed, reason}}
 
       {:task_updated, file_name, info} ->
-        Logger.info("job #{task_id}, loop received :task_updated on #{file_name}")
-        os_pid = Map.fetch!(info, :os_pid)
+        Logger.info("task #{task_id}, loop received :task_updated on #{file_name}")
 
-        if os_pid != 0 && cancel_test do
-          Logger.error("job #{task_id}, sending SIGINT to #{os_pid}")
-          _ = System.cmd("kill", ["-s", "INT", to_string(os_pid)])
+        next_info =
+          case Map.fetch!(info, :os_pid) do
+            0 -> info
+            os_pid -> %LoopTaskInfo{info | os_pid: os_pid, cancel_test: false}
+          end
+
+        if cancel_test do
+          send_sigint(next_info)
         end
 
-        loop(task_id, task, false, expiry)
+        Logger.info("task #{task_id}: re-entering loop")
+        loop(next_info)
+
+      {:EXIT, pid, reason} ->
+        Logger.error("task #{task_id}, loop received :EXIT #{reason}")
+
+        if reason == :oban_cancel do
+          send_sigint(info)
+        end
+
+        {:error, {:EXIT, pid, reason}}
 
       other ->
-        Logger.info("job #{task_id}, loop received #{inspect(other)}")
-        loop(task_id, task, cancel_test, expiry)
+        Logger.error("task #{task_id}, loop received #{inspect(other)}")
+        Logger.info("task #{task_id}: re-entering loop")
+        loop(info)
     after
       time_left ->
-        Logger.error("job #{task_id}: loop timed out")
+        Logger.error("task #{task_id}: loop timed out")
         {:error, :timeout}
     end
+  end
+
+  defp send_sigint(%LoopTaskInfo{os_pid: 0}), do: {:error, :no_pid}
+
+  defp send_sigint(%LoopTaskInfo{os_pid: os_pid, task_id: task_id}) do
+    Logger.error("task #{task_id}, sending SIGINT to #{os_pid}")
+    _ = System.cmd("kill", ["-s", "INT", to_string(os_pid)])
+    :ok
   end
 
   @spec parse_script_output(map(), String.t(), integer()) :: map()

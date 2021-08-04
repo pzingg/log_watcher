@@ -65,7 +65,7 @@ defmodule LogWatcher.Tasks.Session do
 
   @spec broadcast(String.t(), term()) :: :ok | {:error, term()}
   def broadcast(topic, message) when is_tuple(message) do
-    Logger.info("#{inspect(self())} broadcasting to #{topic}: #{Kernel.elem(message, 0)}")
+    Logger.info("#{inspect(self())} broadcasting :#{Kernel.elem(message, 0)} to #{topic}")
     Phoenix.PubSub.broadcast(LogWatcher.PubSub, topic, message)
   end
 

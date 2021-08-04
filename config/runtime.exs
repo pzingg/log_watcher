@@ -36,6 +36,7 @@ config :log_watcher, Oban,
   name: Oban,
   repo: LogWatcher.Repo,
   plugins: oban_plugins,
+  shutdown_grace_period: 1_000,
   queues: [tasks: 10]
 
 config :log_watcher, LogWatcher.Repo,
