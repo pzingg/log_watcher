@@ -22,7 +22,7 @@ defmodule LogWatcher.Application do
     Supervisor.start_link(children, strategy: :one_for_one, name: LogWatcher.Supervisor)
   end
 
-  defp oban_config() do
+  def oban_config() do
     Application.fetch_env!(:log_watcher, Oban)
   end
 end

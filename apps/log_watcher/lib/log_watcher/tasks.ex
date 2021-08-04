@@ -60,7 +60,7 @@ defmodule LogWatcher.Tasks do
   @spec create_session!(String.t(), String.t(), String.t(), String.t(), integer()) :: Session.t()
   def create_session!(session_id, name, description, session_log_path, gen) do
     create_session(session_id, name, description, session_log_path, gen)
-    |> LogWatcher.maybe_raise_input_error("Errors reading session", :session_id)
+    |> LogWatcher.maybe_raise_input_error("Errors creating session", :session_id)
   end
 
   @spec create_session(String.t(), String.t(), String.t(), String.t(), integer()) ::

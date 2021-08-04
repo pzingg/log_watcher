@@ -54,9 +54,10 @@ run_job <- function(args) {
   futile.logger::flog.info(res$message)
   jcat("read arg file\n")
 
+  sleep_time <- 1.0
   num_lines <- res$args$num_lines
   for (line_no in 1:num_lines) {
-    Sys.sleep(0.25)
+    Sys.sleep(sleep_time)
 
     res <- mock_status(task_id, line_no, num_lines, error)
 
@@ -103,6 +104,7 @@ run_job <- function(args) {
       write_start_file(start_file, res)
       jcat("wrote start\n")
       write_start <- FALSE
+      sleep_time <- 0.25
     }
 
     if (write_result && !is.null(result_file)) {

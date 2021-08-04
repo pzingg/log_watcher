@@ -197,8 +197,8 @@ defmodule LogWatcher.FileWatcher do
           state
       ) do
     file = WatchedFile.new(session_log_path, file_name)
-    {_lines, next_file} = check_for_lines(session_id, file)
-    Logger.info("watch added for #{next_file}")
+    next_file = check_for_lines(session_id, file)
+    Logger.info("watch added for #{file_name}")
     next_state = %__MODULE__{state | files: Map.put_new(files, file_name, next_file)}
     {:reply, {:ok, file_name}, next_state}
   end
@@ -236,22 +236,16 @@ defmodule LogWatcher.FileWatcher do
         {:noreply, state}
 
       %WatchedFile{} = file ->
-        {_lines, next_state} =
+        next_state =
           if Enum.member?(events, :modified) do
             Logger.error("got :modified event for #{file_name}")
-            {lines, next_file} = check_for_lines(session_id, file)
-            {lines, %__MODULE__{state | files: Map.put(files, file_name, next_file)}}
+            next_file = check_for_lines(session_id, file)
+            %__MODULE__{state | files: Map.put(files, file_name, next_file)}
           else
-            {[], state}
+            state
           end
 
-        if Enum.member?(events, :closed) do
-          Logger.error("got :closed event for #{file_name}")
-          handle_close(session_id, file_name)
-          {:noreply, next_state}
-        else
-          {:noreply, next_state}
-        end
+        {:noreply, next_state}
     end
   end
 
@@ -266,13 +260,13 @@ defmodule LogWatcher.FileWatcher do
   @spec check_all_files(state()) :: map()
   defp check_all_files(%__MODULE__{session_id: session_id, files: files}) do
     Enum.map(files, fn {file_name, file} ->
-      {_lines, next_file} = check_for_lines(session_id, file)
+      next_file = check_for_lines(session_id, file)
       {file_name, next_file}
     end)
     |> Enum.into(%{})
   end
 
-  @spec check_for_lines(String.t(), WatchedFile.t()) :: {[String.t()], WatchedFile.t()}
+  @spec check_for_lines(String.t(), WatchedFile.t()) :: WatchedFile.t()
   defp check_for_lines(
          session_id,
          %WatchedFile{
@@ -299,27 +293,27 @@ defmodule LogWatcher.FileWatcher do
           last_modified: stat.mtime
       }
 
-      {lines, handle_lines(session_id, next_file, lines)}
+      handle_lines(session_id, next_file, lines)
     else
       {:exists, _} ->
         Logger.error("WatchedFile #{stream.path} does not exist")
-        {[], %WatchedFile{file | stream: File.stream!(stream.path), position: 0, size: 0}}
+        %WatchedFile{file | stream: File.stream!(stream.path), position: 0, size: 0}
 
       {:size, _} ->
         Logger.error("no increase in size")
-        {[], %WatchedFile{file | stream: File.stream!(stream.path), position: 0, size: 0}}
+        %WatchedFile{file | stream: File.stream!(stream.path), position: 0, size: 0}
 
       # {:mtime, _} ->
       #  Logger.error("no change in mtime")
-      #  {[], file}
+      #  file
 
       {:error, reason} ->
         Logger.error("cannot stat #{stream.path}: #{inspect(reason)}")
-        {[], %WatchedFile{file | stream: File.stream!(stream.path), position: 0, size: 0}}
+        %WatchedFile{file | stream: File.stream!(stream.path), position: 0, size: 0}
     end
   end
 
-  @spec handle_lines(String.t(), WatchedFile.t(), [String.t()]) :: boolean()
+  @spec handle_lines(String.t(), WatchedFile.t(), [String.t()]) :: WatchedFile.t()
   defp handle_lines(_session_id, %WatchedFile{} = file, []), do: file
 
   defp handle_lines(session_id, %WatchedFile{stream: stream} = file, lines) do
@@ -349,11 +343,5 @@ defmodule LogWatcher.FileWatcher do
 
       next_acc
     end)
-  end
-
-  @spec handle_close(String.t(), String.t()) :: :ok
-  defp handle_close(_session_id, file_name) do
-    Logger.info("file #{file_name} closed")
-    :ok
   end
 end

@@ -14,31 +14,25 @@ defmodule LogWatcher.TaskStarter do
     :gen
   ]
 
-  # To start a job
-  # %{id: 100, session_id: "S2", session_log_path: "path_to_output",
-  #    task_id: task_id, task_type: "update", gen: 2}
-  #    |> LogWatcher.TaskStarter.new()
-  #    |> Oban.insert()
   @doc """
-  Create a job and schedule it.
+  Insert an Oban.Job for this worker.
   """
-  @spec work(Session.t(), String.t(), String.t(), map()) ::
+  @spec insert_job(Session.t(), String.t(), String.t(), map(), Keyword.t()) ::
           {:ok, Oban.Job.t()} | {:error, Oban.Job.changeset()} | {:error, term()}
-  def work(session, task_id, task_type, task_args) do
+  def insert_job(session, task_id, task_type, task_args, opts \\ []) do
     result =
       Map.from_struct(session)
       |> Map.merge(%{task_id: task_id, task_type: task_type, task_args: task_args})
-      |> LogWatcher.TaskStarter.new()
+      |> __MODULE__.new(opts)
       |> Oban.insert()
 
-    Logger.info("work result #{inspect(result)}")
     result
   end
 
   @impl Oban.Worker
   @spec perform(Oban.Job.t()) :: {:ok, term()} | {:discard, term()}
   def perform(%Oban.Job{
-        id: id,
+        id: job_id,
         args: %{
           "session_id" => session_id,
           "name" => name,
@@ -50,7 +44,7 @@ defmodule LogWatcher.TaskStarter do
           "task_args" => task_args
         }
       }) do
-    Logger.info("job #{id} task_id #{task_id} perform")
+    Logger.error("perform job #{job_id} task_id #{task_id}")
 
     gen =
       if is_binary(gen_arg) do
@@ -63,8 +57,8 @@ defmodule LogWatcher.TaskStarter do
     |> watch_and_run(task_id, task_type, task_args)
   end
 
-  def perform(%Oban.Job{id: id, args: args}) do
-    Logger.error("job #{id} some args are missing: #{inspect(args)}")
+  def perform(%Oban.Job{id: job_id, args: args}) do
+    Logger.error("perform job #{job_id} some args are missing: #{inspect(args)}")
     {:discard, "Not a task job"}
   end
 
@@ -81,6 +75,8 @@ defmodule LogWatcher.TaskStarter do
         task_type,
         task_args
       ) do
+    Logger.error("watch_and_run")
+
     log_file = Task.log_file_name(task_id, task_type, gen)
     script_file = Map.fetch!(task_args, "script_file")
 

@@ -16,6 +16,11 @@ defmodule LogWatcher.DataCase do
 
   use ExUnit.CaseTemplate
 
+  alias LogWatcher.{Tasks, TaskStarter}
+  alias LogWatcher.Tasks.Session
+
+  require Logger
+
   using do
     quote do
       alias LogWatcher.Repo
@@ -32,6 +37,15 @@ defmodule LogWatcher.DataCase do
 
     unless tags[:async] do
       Ecto.Adapters.SQL.Sandbox.mode(LogWatcher.Repo, {:shared, self()})
+    end
+
+    if tags[:start_oban] do
+      {deleted, _} = LogWatcher.Repo.delete_all(Oban.Job)
+      Logger.error("deleted #{deleted} existing jobs")
+      config = LogWatcher.Application.oban_config()
+      Logger.error("Oban config #{inspect(config)}")
+      result = Oban.start_link(config)
+      Logger.error("started Oban supervisor #{inspect(result)}")
     end
 
     :ok
@@ -51,5 +65,106 @@ defmodule LogWatcher.DataCase do
         opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
       end)
     end)
+  end
+
+  @spec assert_script_started(term(), String.t()) :: {Elixir.Task.t(), [term()]}
+  def assert_script_started(start_result, task_id) do
+    {:ok, %{task_id: job_task_id, status: status, message: message, script_task: task}} =
+      start_result
+
+    assert job_task_id == task_id
+    assert status == "running"
+    assert String.contains?(message, "running on line")
+    task
+  end
+
+  @spec assert_script_errors(term(), String.t(), String.t(), String.t()) ::
+          {Elixir.Task.t(), [term()]}
+  def assert_script_errors(
+        start_result,
+        task_id,
+        expected_category,
+        expected_status \\ "completed"
+      ) do
+    {:ok, %{task_id: job_task_id, status: status, message: message, script_task: task} = info} =
+      start_result
+
+    assert job_task_id == task_id
+    assert status == expected_status
+    errors = get_in(info, [:result, :errors])
+    assert !is_nil(errors)
+    first_error = hd(errors)
+    assert !is_nil(first_error)
+    assert first_error.category == expected_category
+    task
+  end
+
+  @spec wait_on_script_task(term(), integer()) :: {:ok, term()} | {:error, :timeout}
+  def wait_on_script_task({:ok, %{script_task: %Elixir.Task{} = task}}, timeout) do
+    TaskStarter.yield_or_shutdown_task(task, timeout)
+  end
+
+  def wait_on_script_task(%Elixir.Task{} = task, timeout) do
+    TaskStarter.yield_or_shutdown_task(task, timeout)
+  end
+
+  def wait_on_script_task(other, _timeout), do: other
+
+  @spec wait_on_os_process(integer(), integer()) :: :ok | {:error, :timeout}
+  def wait_on_os_process(os_pid, timeout) do
+    proc_file = "/proc/#{os_pid}"
+
+    if File.exists?(proc_file) do
+      expiry = System.monotonic_time() + timeout
+      wait_on_proc_file_until(proc_file, expiry)
+    else
+      :ok
+    end
+  end
+
+  @spec wait_on_proc_file_until(String.t(), integer()) :: :ok | {:error, :timeout}
+  def wait_on_proc_file_until(proc_file, expiry) do
+    now = System.monotonic_time()
+    Process.sleep(1)
+
+    if File.exists?(proc_file) do
+      if expiry < now do
+        {:error, :timeout}
+      else
+        wait_on_proc_file_until(proc_file, expiry)
+      end
+    else
+      :ok
+    end
+  end
+
+  def archive_existing_tasks(session) do
+    Tasks.list_task_log_files(session)
+    |> Enum.filter(fn %{archived?: archived} -> !archived end)
+    |> Enum.map(fn %{task_id: task_id} -> Tasks.archive_task(session, task_id) end)
+  end
+
+  def fake_task_args(context, opts) do
+    session_id = Faker.Util.format("S%4d")
+    session_log_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "output"])
+    gen = :random.uniform(10) - 1
+    name = to_string(context.test) |> String.slice(0..10) |> String.trim()
+    description = to_string(context.test)
+
+    {:ok, %Session{} = session} =
+      Tasks.create_session(session_id, name, description, session_log_path, gen)
+
+    %{
+      session: session,
+      task_id: Faker.Util.format("T%4d"),
+      task_type: Faker.Util.pick(["create", "update", "generate", "analytics"]),
+      task_args: %{
+        "script_file" => Keyword.get(opts, :script_file, "mock_task.R"),
+        "error" => Keyword.get(opts, :error, ""),
+        "cancel_test" => Keyword.get(opts, :cancel_test, false),
+        "num_lines" => :random.uniform(6) + 6,
+        "space_type" => Faker.Util.pick(["mixture", "factorial", "sparsefactorial"])
+      }
+    }
   end
 end

@@ -25,10 +25,18 @@ umbrella_env_paths =
 
 source!(umbrella_env_paths)
 
+oban_plugins =
+  if config_env() == :test do
+    [Oban.Plugins.Repeater]
+  else
+    [{Oban.Plugins.Pruner, max_age: 600}]
+  end
+
 config :log_watcher, Oban,
+  name: Oban,
   repo: LogWatcher.Repo,
-  plugins: [{Oban.Plugins.Pruner, max_age: 600}],
-  queues: [log_watcher: 10]
+  plugins: oban_plugins,
+  queues: [tasks: 10]
 
 config :log_watcher, LogWatcher.Repo,
   username: env!("DB_USER", :string!),
