@@ -9,10 +9,10 @@ defmodule LogWatcher.Application do
     children = [
       # Start the Ecto repository
       LogWatcher.Repo,
+      # Run scripts
+      {LogWatcher.ScriptServer, name: LogWatcher.ScriptServer},
       # Monitor long running scripts via Elixir Tasks.
       {Elixir.Task.Supervisor, name: LogWatcher.TaskSupervisor},
-      # Monitor jobs started by Oban
-      {LogWatcher.TaskMonitor, name: LogWatcher.TaskMonitor},
       # Start the PubSub system
       {Phoenix.PubSub, name: LogWatcher.PubSub},
       # Run jobs via a PostgreSQL database

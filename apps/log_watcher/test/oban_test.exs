@@ -89,7 +89,7 @@ defmodule LogWatcher.MockTaskTest do
     Process.sleep(1_000)
     Logger.error("canceling job...")
     :ok = Oban.cancel_job(job_id)
-    LogWatcher.TaskMonitor.kill_oban_worker(job_id, :oban_cancel)
+    LogWatcher.ScriptServer.cancel_script(job_id)
 
     {:ok, info} = wait_for_job_state(job_id, :cancelled, expiry)
     # assert Enum.empty?(info.running)

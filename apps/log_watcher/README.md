@@ -140,8 +140,10 @@ system will need to clean up and restore any non-log
 session data to the state it was prior to the task being
 run.
 
-TODO: Figure out how or if an Oban.Job communicates with
-its worker when it is cancelled.
+Note: Oban will send an exit signal to a running worker when
+a job is canceled, but only if PostgreSQL notifications are 
+active. In the test environment, we must manually send a 
+"cancel_script" message to the `LogWatcher.ScriptServer`.
 
 
 ## Oban compatibility
