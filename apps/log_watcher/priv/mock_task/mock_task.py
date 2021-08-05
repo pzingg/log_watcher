@@ -258,6 +258,7 @@ def run_job():
   print(f'mock_task, task_args are {task_args}')
   log_info(info, log_file_path)
 
+  sleep_time = 1.0
   num_lines = task_args['num_lines']
   for line_no in range(1, num_lines+1):
     info, result, errors = mock_status(info, line_no, num_lines, error)
@@ -294,6 +295,7 @@ def run_job():
       start_file = start_file_name(task_id, task_type, gen)
       write_start_file(start_file, info)
       write_start = False
+      sleep_time = 0.25
 
     if write_result and result_file is not None:
       print(f'mock_task, writing result file')
@@ -303,7 +305,8 @@ def run_job():
     log_info(info, log_file_path)
     if write_result:
       break
-    time.sleep(2)
+
+    time.sleep(sleep_time)
 
   print(f'mock_task, closing log file')
 

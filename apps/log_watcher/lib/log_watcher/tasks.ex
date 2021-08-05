@@ -111,6 +111,13 @@ defmodule LogWatcher.Tasks do
 
   ### Task files on disk
 
+  @spec archive_session_tasks(Session.t()) :: [{String.t(), :ok | {:error, term()}}]
+  def archive_session_tasks(%Session{} = session) do
+    list_task_log_files(session, false)
+    |> Enum.map(fn %{task_id: task_id} -> archive_task(session, task_id) end)
+    |> List.flatten()
+  end
+
   @spec list_task_log_files(Session.t(), boolean()) :: [String.t()]
   def list_task_log_files(
         %Session{session_id: session_id, session_log_path: session_log_path},

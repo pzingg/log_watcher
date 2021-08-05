@@ -7,6 +7,9 @@ defmodule LogWatcher do
   if it comes from the database, an external API or others.
   """
 
+  alias LogWatcher.{Tasks, TaskStarter}
+  alias LogWatcher.Tasks.Session
+
   ## General utilities
 
   @spec format_utcnow() :: String.t()
@@ -123,6 +126,43 @@ defmodule LogWatcher do
       Tuple.to_list(types) |> Map.new(),
       Tuple.to_list(permitted_fields),
       Tuple.to_list(required_fields) |> Enum.filter(fn k -> !is_nil(k) end)
+    }
+  end
+
+  @spec run_mock_task(String.t(), Keyword.t()) :: {:ok, term()} | {:discard, term()}
+  def run_mock_task(description, opts \\ []) do
+    %{session: session, task_id: task_id, task_type: task_type, task_args: mock_task_args} =
+      mock_task_args(description, script_file: "mock_task.R")
+
+    task_args =
+      Enum.reduce(opts, mock_task_args, fn {key, value}, acc -> Map.put(acc, to_string(key), value) end)
+
+    Tasks.archive_session_tasks(session)
+
+    TaskStarter.watch_and_run(session, task_id, task_type, task_args)
+  end
+
+  @spec mock_task_args(String.t(), Keyword.t()) :: map()
+  def mock_task_args(description, opts) do
+    session_id = Faker.Util.format("S%4d")
+    session_log_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "output"])
+    gen = :random.uniform(10) - 1
+    name = to_string(description) |> String.slice(0..10) |> String.trim()
+
+    {:ok, %Session{} = session} =
+      Tasks.create_session(session_id, name, description, session_log_path, gen)
+
+    %{
+      session: session,
+      task_id: Faker.Util.format("T%4d"),
+      task_type: Faker.Util.pick(["create", "update", "generate", "analytics"]),
+      task_args: %{
+        "script_file" => Keyword.get(opts, :script_file, "mock_task.R"),
+        "error" => Keyword.get(opts, :error, ""),
+        "cancel" => Keyword.get(opts, :cancel, false),
+        "num_lines" => :random.uniform(6) + 6,
+        "space_type" => Faker.Util.pick(["mixture", "factorial", "sparsefactorial"])
+      }
     }
   end
 end

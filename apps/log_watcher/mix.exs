@@ -44,7 +44,7 @@ defmodule LogWatcher.MixProject do
       {:dialyxir, "~> 1.1", only: [:dev], runtime: false},
       {:dotenvy, "~> 0.3"},
       {:ecto_sql, "~> 3.6"},
-      {:faker, "~> 0.16", only: :test},
+      {:faker, "~> 0.16", only: [:dev, :test]},
       {:file_system, "~> 0.2"},
       {:gproc, "~> 0.9"},
       {:jason, "~> 1.2"},

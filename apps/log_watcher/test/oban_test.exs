@@ -2,19 +2,20 @@ defmodule LogWatcher.MockTaskTest do
   use LogWatcher.DataCase, async: false
   use Oban.Testing, repo: LogWatcher.Repo
 
-  alias LogWatcher.TaskStarter
+  alias LogWatcher.{Tasks, TaskStarter}
+  alias LogWatcher.Tasks.Session
 
   require Logger
 
   @oban_exec_timeout 30_000
-  @script_timeout 10_000
+  @script_timeout 30_000
 
   @tag :start_oban
   test "01 queues and runs an Oban job", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
-      fake_task_args(context, script_file: "mock_task.R")
+      LogWatcher.mock_task_args(to_string(context.test), script_file: "mock_task.R")
 
-    archive_existing_tasks(session)
+    Tasks.archive_session_tasks(session)
 
     %{failure: 0, success: 0} = Oban.drain_queue(queue: :tasks)
 
@@ -48,9 +49,9 @@ defmodule LogWatcher.MockTaskTest do
   @tag :start_oban
   test "02 runs a mock task under Oban", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
-      fake_task_args(context, script_file: "mock_task.R")
+      LogWatcher.mock_task_args(to_string(context.test), script_file: "mock_task.R")
 
-    archive_existing_tasks(session)
+    Tasks.archive_session_tasks(session)
 
     args = %{
       session_id: session.session_id,
@@ -71,9 +72,9 @@ defmodule LogWatcher.MockTaskTest do
   @tag :start_oban
   test "03 cancels an Oban job", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
-      fake_task_args(context, script_file: "mock_task.R")
+      LogWatcher.mock_task_args(to_string(context.test), script_file: "mock_task.R")
 
-    archive_existing_tasks(session)
+    Tasks.archive_session_tasks(session)
 
     {:ok, %Oban.Job{id: job_id, queue: "tasks", state: state}} =
       TaskStarter.insert_job(session, task_id, task_type, task_args)

@@ -16,9 +16,6 @@ defmodule LogWatcher.DataCase do
 
   use ExUnit.CaseTemplate
 
-  alias LogWatcher.Tasks
-  alias LogWatcher.Tasks.Session
-
   require Logger
 
   using do
@@ -37,15 +34,6 @@ defmodule LogWatcher.DataCase do
 
     unless tags[:async] do
       Ecto.Adapters.SQL.Sandbox.mode(LogWatcher.Repo, {:shared, self()})
-    end
-
-    if tags[:start_oban] do
-      {deleted, _} = LogWatcher.Repo.delete_all(Oban.Job)
-      Logger.error("deleted #{deleted} existing jobs")
-      config = LogWatcher.Application.oban_config()
-      Logger.error("Oban config #{inspect(config)}")
-      result = Oban.start_link(config)
-      Logger.error("started Oban supervisor #{inspect(result)}")
     end
 
     :ok
@@ -101,11 +89,15 @@ defmodule LogWatcher.DataCase do
 
   @spec wait_on_script_task(reference(), integer()) :: {:ok, term()} | {:error, :timeout}
   def wait_on_script_task(task_ref, timeout) when is_reference(task_ref) do
-    LogWatcher.ScriptServer.yield_or_shutdown_task(task_ref, timeout)
+    Logger.error("wait_on_script_task #{inspect(task_ref)}")
+    result = LogWatcher.ScriptServer.yield_or_shutdown_task(task_ref, timeout)
+    Logger.error("wait_on_script_task returned #{inspect(result)}")
+    result
   end
 
   @spec wait_on_os_process(integer(), integer()) :: :ok | {:error, :timeout}
   def wait_on_os_process(os_pid, timeout) do
+    Logger.error("wait_on_os_process #{os_pid}")
     proc_file = "/proc/#{os_pid}"
 
     if File.exists?(proc_file) do
@@ -130,35 +122,5 @@ defmodule LogWatcher.DataCase do
     else
       :ok
     end
-  end
-
-  def archive_existing_tasks(session) do
-    Tasks.list_task_log_files(session)
-    |> Enum.filter(fn %{archived?: archived} -> !archived end)
-    |> Enum.map(fn %{task_id: task_id} -> Tasks.archive_task(session, task_id) end)
-  end
-
-  def fake_task_args(context, opts) do
-    session_id = Faker.Util.format("S%4d")
-    session_log_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "output"])
-    gen = :random.uniform(10) - 1
-    name = to_string(context.test) |> String.slice(0..10) |> String.trim()
-    description = to_string(context.test)
-
-    {:ok, %Session{} = session} =
-      Tasks.create_session(session_id, name, description, session_log_path, gen)
-
-    %{
-      session: session,
-      task_id: Faker.Util.format("T%4d"),
-      task_type: Faker.Util.pick(["create", "update", "generate", "analytics"]),
-      task_args: %{
-        "script_file" => Keyword.get(opts, :script_file, "mock_task.R"),
-        "error" => Keyword.get(opts, :error, ""),
-        "cancel_test" => Keyword.get(opts, :cancel_test, false),
-        "num_lines" => :random.uniform(6) + 6,
-        "space_type" => Faker.Util.pick(["mixture", "factorial", "sparsefactorial"])
-      }
-    }
   end
 end

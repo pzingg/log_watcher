@@ -158,3 +158,35 @@ encounter exceptions or script-generated errors, return an
 Tasks that cannot be started, or have other structural
 problems, return a `{:discard, result}` tuple
 so that Oban will not attempt to re-run them.
+
+## Supervision tree and processes
+
+Refer to [log_watcher_tree.png](log_watcher_tree.png) diagram.
+
+0.322.0 - application_master.init
+  0.323.0 - application_master.start_it
+    LogWatcher.Supervisor
+      0.355.0 - Oban
+        0.356.0 - Oban.PostgresNotifier
+          0.359.0 - Postgrex.Notifications
+        0.357.0 - Oban.Midwife
+        0.358.0 - Oban.Plugins.Pruner
+        0.360.0 - Oban.Plugins.Stager
+        0.361.0 - Oban.Queue.Supervisor
+          0.362.0 - Task.Supervisor
+          0.363.0 - Oban.Queue.Producer
+          0.364.0 - Oban.Queue.Watchman
+      LogWatcher.FileWatcherSupervisor
+        0.423.0 - LogWatcher.FileWatcher
+          0.424.0 - FileSystem.Worker
+            0.425.0 - FileSystem.Backends.FSInotify
+      LogWatcher.PubSubSupervisor
+        LogWatcher.PubSub
+          LogWatcher.PubSub.PIDPartition0
+          LogWatcher.PubSub.PIDPartition1
+        LogWatcher.PubSub.Adapter
+      LogWatcher.Repo
+        0.326.0 - DBConnection.ConnectionPool
+      LogWatcher.ScriptServer
+      LogWatcher.TaskSupervisor
+        0.427.0 - Task [monitored by LogWatcher.ScriptServer]

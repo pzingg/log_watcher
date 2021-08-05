@@ -106,8 +106,11 @@ defmodule LogWatcher.FileWatcher do
 
   @spec start_or_find_link(String.t(), String.t()) :: GenServer.on_start()
   defp start_or_find_link(session_id, session_log_path) do
-    case start_link(session_id, session_log_path) do
+    case LogWatcher.FileWatcherSupervisor.start_child(session_id, session_log_path) do
       {:ok, pid} ->
+        {:ok, pid}
+
+      {:ok, pid, _info} ->
         {:ok, pid}
 
       {:error, {:already_started, pid}} ->
@@ -121,8 +124,10 @@ defmodule LogWatcher.FileWatcher do
   @doc """
   Public interface. Start the GenServer for a session.
   """
-  @spec start_link(String.t(), String.t()) :: GenServer.on_start()
-  def start_link(session_id, session_log_path) do
+  @spec start_link(Keyword.t()) :: GenServer.on_start()
+  def start_link(opts) do
+    session_id = Keyword.fetch!(opts, :session_id)
+    session_log_path = Keyword.fetch!(opts, :session_log_path)
     Logger.info("FileWatcher start_link #{session_id} #{session_log_path}")
     GenServer.start_link(__MODULE__, [session_id, session_log_path], name: via_tuple(session_id))
   end
@@ -181,7 +186,7 @@ defmodule LogWatcher.FileWatcher do
   """
   @impl true
   @spec init(term()) :: {:ok, state()}
-  def init([session_id, session_log_path]) do
+  def init([session_id, session_log_path] = arg) do
     Logger.info("FileWatcher init #{session_id} #{session_log_path}")
 
     args = [dirs: [session_log_path], recursive: false]

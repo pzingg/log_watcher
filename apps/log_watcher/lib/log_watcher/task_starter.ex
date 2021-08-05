@@ -22,13 +22,13 @@ defmodule LogWatcher.TaskStarter do
   alias LogWatcher.Tasks.{Session, Task}
 
   defmodule LoopInfo do
-    @enforce_keys [:expiry, :job_id, :task_id, :task_ref, :cancel_test]
+    @enforce_keys [:expiry, :job_id, :task_id, :task_ref, :cancel]
 
     defstruct expiry: 0,
               job_id: 0,
               task_id: nil,
               task_ref: nil,
-              cancel_test: false,
+              cancel: nil,
               sent_os_pid: false
 
     @type t() :: %__MODULE__{
@@ -36,7 +36,7 @@ defmodule LogWatcher.TaskStarter do
             job_id: integer(),
             task_id: String.t(),
             task_ref: Elixir.Task.t(),
-            cancel_test: boolean(),
+            cancel: String.t(),
             sent_os_pid: boolean()
           }
   end
@@ -111,12 +111,10 @@ defmodule LogWatcher.TaskStarter do
 
     # Set up to receive messages
     job_id = Map.get(task_args, "oban_job_id", 0)
-    cancel_test = Map.get(task_args, "cancel_test", false)
+    cancel = Map.get(task_args, "cancel", "none")
     script_timeout = Map.get(task_args, "script_timeout", @default_script_timeout)
 
-    Logger.info(
-      "task #{task_id}: job_id #{job_id}, cancel_test #{cancel_test}, pid is #{inspect(self())}"
-    )
+    Logger.info("task #{task_id}: job_id #{job_id}, cancel #{cancel}, pid is #{inspect(self())}")
 
     Logger.info("task #{task_id}: start watching #{log_file} in #{session_log_path}")
 
@@ -159,7 +157,7 @@ defmodule LogWatcher.TaskStarter do
       job_id: job_id,
       task_id: task_id,
       task_ref: task_ref,
-      cancel_test: cancel_test
+      cancel: cancel
     }
 
     result = loop(task_info)
@@ -222,11 +220,8 @@ defmodule LogWatcher.TaskStarter do
   def loop(
         %LoopInfo{
           expiry: expiry,
-          job_id: job_id,
           task_id: task_id,
-          task_ref: task_ref,
-          cancel_test: cancel_test,
-          sent_os_pid: sent_os_pid
+          task_ref: task_ref
         } = info
       ) do
     time_now = System.monotonic_time(:millisecond)
@@ -259,29 +254,16 @@ defmodule LogWatcher.TaskStarter do
         Logger.info("task #{task_id}, loop received :task_updated on #{file_name}")
 
         next_info =
-          case {Map.get(update_info, :os_pid, 0), sent_os_pid} do
-            {0, _} ->
-              info
-
-            {os_pid, false} ->
-              _ = LogWatcher.ScriptServer.update_os_pid(task_ref, os_pid)
-
-              if cancel_test do
-                _ = LogWatcher.ScriptServer.cancel_script(job_id)
-              end
-
-              %LoopInfo{info | cancel_test: false, sent_os_pid: true}
-
-            _ ->
-              info
-          end
+          info
+          |> maybe_update_os_pid(update_info)
+          |> maybe_cancel_script(update_info)
 
         Logger.info("task #{task_id}: re-entering loop")
         loop(next_info)
 
       {:EXIT, pid, reason} ->
         Logger.error("task #{task_id}, loop received :EXIT #{reason}")
-        _ = LogWatcher.ScriptServer.cancel_script(job_id)
+        _ = LogWatcher.ScriptServer.cancel_script(task_ref)
         {:error, {:EXIT, pid, reason}}
 
       other ->
@@ -305,5 +287,35 @@ defmodule LogWatcher.TaskStarter do
     map
     |> Jason.encode!()
     |> Jason.decode!(keys: key_type)
+  end
+
+  @spec maybe_update_os_pid(LoopInfo.t(), map()) :: LoopInfo.t()
+  defp maybe_update_os_pid(
+         %LoopInfo{task_id: task_id, task_ref: task_ref, sent_os_pid: sent_os_pid} = info,
+         update_info
+       ) do
+    os_pid = Map.get(update_info, :os_pid, 0)
+
+    if os_pid != 0 && !sent_os_pid do
+      Logger.error("task #{task_id}: got os_pid #{os_pid}")
+      _ = LogWatcher.ScriptServer.update_os_pid(task_ref, os_pid)
+      %LoopInfo{info | sent_os_pid: true}
+    else
+      info
+    end
+  end
+
+  @spec maybe_cancel_script(LoopInfo.t(), map()) :: LoopInfo.t()
+  defp maybe_cancel_script(
+         %LoopInfo{task_id: task_id, task_ref: task_ref, cancel: cancel} = info,
+         %{status: status}
+       ) do
+    if status == cancel do
+      Logger.error("task #{task_id}: cancelling script, last status read was #{status}")
+      _ = LogWatcher.ScriptServer.cancel_script(task_ref)
+      %LoopInfo{info | cancel: "sent"}
+    else
+      info
+    end
   end
 end

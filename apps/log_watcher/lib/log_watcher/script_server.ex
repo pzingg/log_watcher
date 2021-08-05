@@ -24,14 +24,18 @@ defmodule LogWatcher.ScriptServer do
               task_id: nil,
               job_id: 0,
               os_pid: 0,
-              sigint_pending: false
+              task_result: nil,
+              sigint_pending: false,
+              yield_client: nil
 
     @type t() :: %__MODULE__{
             task: Elixir.Task.t(),
             task_id: String.t(),
             job_id: integer(),
             os_pid: integer(),
-            sigint_pending: boolean()
+            task_result: term(),
+            sigint_pending: boolean(),
+            yield_client: pid()
           }
   end
 
@@ -61,29 +65,23 @@ defmodule LogWatcher.ScriptServer do
     GenServer.call(__MODULE__, {:update_os_pid, task_ref, os_pid})
   end
 
-  @spec cancel_script(String.t()) :: :ok | {:error, :not_found}
-  def cancel_script(job_id) do
-    GenServer.call(__MODULE__, {:cancel_script, job_id})
+  @spec cancel_script(reference() | integer()) :: :ok | {:error, :not_found}
+  def cancel_script(task_ref_or_job_id) do
+    GenServer.call(__MODULE__, {:cancel_script, task_ref_or_job_id})
   end
 
   @spec yield_or_shutdown_task(reference(), integer()) ::
           :ok | {:ok, term()} | {:error, :timeout}
   def yield_or_shutdown_task(task_ref, timeout) do
-    GenServer.call(__MODULE__, {:yield_or_shutdown, task_ref, timeout})
-  end
-
-  @spec send_sigint(String.t(), integer()) :: :ok | {:error, :no_pid}
-  def send_sigint(_task_id, 0), do: {:error, :no_pid}
-
-  def send_sigint(task_id, os_pid) do
-    Logger.error("ScriptServer task #{task_id}, sending SIGINT to #{os_pid}")
-    _ = System.cmd("kill", ["-s", "INT", to_string(os_pid)])
-    :ok
+    # Prevent this by specifying (timeout + 100) in the GenServer.call:
+    # ** (exit) exited in: GenServer.call(LogWatcher.ScriptServer, {:yield_or_shutdown, #Reference<0.461027745.1939865606.72509>, 10000}, 5000)
+    #      ** (EXIT) time out
+    GenServer.call(__MODULE__, {:yield_or_shutdown, task_ref, timeout}, timeout + 100)
   end
 
   @impl true
   def init(_arg) do
-    # We will keep all running tasks in a map
+    Process.flag(:trap_exit, true)
     {:ok, %__MODULE__{}}
   end
 
@@ -134,83 +132,114 @@ defmodule LogWatcher.ScriptServer do
     end
   end
 
-  def handle_call({:cancel_script, job_id}, _from, state) do
-    case find_task_by_job_id(job_id, state) do
-      {task_ref, %TaskInfo{os_pid: 0} = info} ->
-        Logger.error("ScriptServer cancel_script, no os_pid available")
-
-        next_state =
-          put_in(
-            state.tasks[task_ref],
-            %TaskInfo{info | sigint_pending: true}
-          )
-
-        {:reply, :pending, next_state}
-
-      {task_ref, %TaskInfo{task_id: task_id, os_pid: os_pid} = info} ->
-        Logger.error("ScriptServer cancel_script, sending SIGINT to #{os_pid}")
-
-        next_state =
-          put_in(
-            state.tasks[task_ref],
-            %TaskInfo{info | sigint_pending: false}
-          )
-
-        {:reply, send_sigint(task_id, os_pid), next_state}
-
+  def handle_call({:cancel_script, task_ref}, _from, state) when is_reference(task_ref) do
+    case Map.get(state.tasks, task_ref) do
       nil ->
-        Logger.error("ScriptServer cancel_script, job #{job_id} not found")
+        Logger.error("ScriptServer cancel_script, task_ref #{inspect(task_ref)} not found")
         {:reply, {:error, :not_found}, state}
+
+      info ->
+        handle_cancel(task_ref, info, state)
     end
   end
 
-  def handle_call({:yield_or_shutdown, task_ref, timeout}, _from, state) do
-    Logger.info("ScriptServer yielding to script task #{inspect(task_ref)}...")
+  def handle_call({:cancel_script, job_id}, _from, state) when is_integer(job_id) do
+    case find_task_by_job_id(job_id, state) do
+      nil ->
+        Logger.error("ScriptServer cancel_script, job #{job_id} not found")
+        {:reply, {:error, :not_found}, state}
 
+      {task_ref, info} ->
+        handle_cancel(task_ref, info, state)
+    end
+  end
+
+  def handle_call({:yield_or_shutdown, task_ref, timeout}, from, state) do
     case Map.get(state.tasks, task_ref) do
-      %TaskInfo{task: task} ->
-        # The task succeeded so we can cancel the monitoring and discard the DOWN message
-        Process.demonitor(task_ref, [:flush])
-        next_state = %__MODULE__{state | tasks: Map.delete(state.tasks, task_ref)}
+      %TaskInfo{yield_client: yield_client} when is_pid(yield_client) ->
+        Logger.error("ScriptServer :yield_or_shutdown already shutting down")
+        {:reply, {:error, :shutting_down}, state}
 
-        case Elixir.Task.yield(task, timeout) || Elixir.Task.shutdown(task) do
-          {:ok, result} ->
-            case result do
-              :ok ->
-                Logger.info("ScriptServer after yield, script task returned :ok")
-                {:reply, :ok, next_state}
+      %TaskInfo{} = info ->
+        Logger.info("ScriptServer :yield_or_shutdown")
+        Process.send_after(self(), {:yield_timeout, task_ref}, timeout)
 
-              _ ->
-                Logger.info("ScriptServer after yield, script task returned #{inspect(result)}")
-                {:reply, {:ok, result}, next_state}
-            end
+        next_state =
+          put_in(
+            state.tasks[task_ref],
+            %TaskInfo{info | yield_client: from}
+          )
 
-          nil ->
-            Logger.warn("ScriptServer after yield, failed to get a result from script task in #{timeout}ms")
-            {:reply, {:error, :timeout}, next_state}
-        end
+        Logger.info("next state is now #{inspect(next_state)}")
+        {:noreply, next_state}
 
       _ ->
-        Logger.error("ScriptServer task_ref not found")
+        Logger.error("ScriptServer :yield_or_shutdown task_ref not found")
         {:reply, {:error, :not_found}, state}
     end
   end
 
   @impl true
-  def handle_info({task_ref, result}, state) do
-    # The task succeeded so we can cancel the monitoring and discard the DOWN message
-    Process.demonitor(task_ref, [:flush])
+  def handle_info({:yield_timeout, task_ref}, state) do
+    case Map.get(state.tasks, task_ref) do
+      %TaskInfo{task_id: task_id, yield_client: nil} ->
+        Logger.error("ScriptServer :yield_timeout for task #{task_id}, no client")
+        {:noreply, state}
 
-    {%TaskInfo{task_id: task_id}, next_state} = pop_in(state.tasks[task_ref])
-    Logger.error("ScriptServer task #{task_id} got #{inspect(result)}")
-    {:noreply, next_state}
+      %TaskInfo{task: task, task_id: task_id, yield_client: yield_client} = info ->
+        Logger.error("ScriptServer :yield_timeout for task #{task_id}")
+        GenServer.reply(yield_client, {:error, :timeout})
+
+        Process.exit(task.pid, :shutdown)
+
+        next_state =
+          put_in(
+            state.tasks[task_ref],
+            %TaskInfo{info | yield_client: nil}
+          )
+
+        {:noreply, next_state}
+
+      _ ->
+        Logger.error("ScriptServer :yield_timeout #{inspect(task_ref)} already removed")
+        {:noreply, state}
+    end
+  end
+
+  def handle_info({task_ref, result}, state) do
+    case Map.get(state.tasks, task_ref) do
+      nil ->
+        Logger.error("ScriptServer ref #{inspect(task_ref)} already removed")
+        {:noreply, state}
+
+      %TaskInfo{task_id: task_id, yield_client: yield_client} ->
+        Logger.error("ScriptServer ref for task #{task_id} got #{inspect(result)}")
+
+        # The task succeeded so we can cancel the monitoring and discard the DOWN message
+        Process.demonitor(task_ref, [:flush])
+
+        if !is_nil(yield_client) do
+          Logger.error("ScriptServer ref replying with result")
+          GenServer.reply(yield_client, result)
+        end
+
+        next_state = %__MODULE__{state | tasks: Map.delete(state.tasks, task_ref)}
+        {:noreply, next_state}
+    end
   end
 
   def handle_info({:DOWN, task_ref, _, _, reason}, state) do
-    {%TaskInfo{task_id: task_id}, next_state} = pop_in(state.tasks[task_ref])
+    # What does :noconnection reason mean? See Task.yield implementation.
+    case Map.get(state.tasks, task_ref) do
+      nil ->
+        Logger.error("ScriptServer :DOWN task_ref #{inspect(task_ref)} already removed")
+        {:noreply, state}
 
-    Logger.error("ScriptServer task #{task_id} failed with reason #{inspect(reason)}")
-    {:noreply, next_state}
+      %TaskInfo{task_id: task_id} ->
+        Logger.error("ScriptServer task #{task_id} failed with reason #{inspect(reason)}")
+        next_state = %__MODULE__{state | tasks: Map.delete(state.tasks, task_ref)}
+        {:noreply, next_state}
+    end
   end
 
   def handle_info({:EXIT, pid, reason}, state) do
@@ -224,6 +253,41 @@ defmodule LogWatcher.ScriptServer do
       {_ref, %TaskInfo{job_id: ^job_id}} -> true
       _ -> false
     end)
+  end
+
+  defp handle_cancel(task_ref, %TaskInfo{task_id: task_id, os_pid: os_pid} = info, state) do
+    case os_pid do
+      0 ->
+        Logger.error("ScriptServer cancel_script, no os_pid available")
+
+        next_state =
+          put_in(
+            state.tasks[task_ref],
+            %TaskInfo{info | sigint_pending: true}
+          )
+
+        {:reply, :pending, next_state}
+
+      _ ->
+        Logger.error("ScriptServer cancel_script, sending SIGINT to #{os_pid}")
+
+        next_state =
+          put_in(
+            state.tasks[task_ref],
+            %TaskInfo{info | sigint_pending: false}
+          )
+
+        {:reply, send_sigint(task_id, os_pid), next_state}
+    end
+  end
+
+  @spec send_sigint(String.t(), integer()) :: :ok | {:error, :no_pid}
+  defp send_sigint(_task_id, 0), do: {:error, :no_pid}
+
+  defp send_sigint(task_id, os_pid) do
+    Logger.error("ScriptServer task #{task_id}, sending SIGINT to #{os_pid}")
+    _ = System.cmd("kill", ["-s", "INT", to_string(os_pid)])
+    :ok
   end
 
   @spec do_run_script(
@@ -275,16 +339,15 @@ defmodule LogWatcher.ScriptServer do
       ]
 
       script_args =
-        case start_args[:error] do
-          "" ->
-            basic_args
+        Enum.reduce([:error], basic_args, fn key, acc ->
+          value = Map.get(start_args, key)
 
-          error when is_binary(error) ->
-            basic_args ++ ["--error", error]
-
-          _ ->
-            basic_args
-        end
+          if is_binary(value) && value != "" do
+            acc ++ ["--#{key}", value]
+          else
+            acc
+          end
+        end)
 
       Logger.info(
         "ScriptServer task #{task_id}: shelling out to #{executable} with args #{
