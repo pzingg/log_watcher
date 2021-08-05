@@ -1,7 +1,29 @@
 defmodule LogWatcher.Tasks.Task do
   @moduledoc """
   Defines a Task struct for use with schemaless changesets.
-  Tasks are not stored in a SQL database.
+  Tasks are not stored in a SQL database. Task states are stored and
+  maintained in JSON-encoded files.
+
+  Each task has a unique ID, the `:task_id` (usually a UUID or ULID).
+
+  A task is perfomed in the context of a session, that is
+  the scripts and data files for the task are located in the session
+  directory on the file system, and so also has these fields
+  that reference the session:
+
+  * `:session_id`
+  * `:session_log_path`
+
+  Each task has a few required metadata fields specific to an
+  implementation for a particular software system:
+
+  * `:task_type` - A string identifying the category of this
+    task.
+  * `:gen` - An integer used to identify the particular
+    invocation of the task.
+
+  The other task fields are updated by reading the log files
+  produced by the task.
   """
 
   use TypedStruct
@@ -9,39 +31,41 @@ defmodule LogWatcher.Tasks.Task do
   typedstruct do
     @typedoc "A daptics task constructed from log files"
 
-    plugin TypedStructEctoChangeset
-    field :task_id, String.t(), enforce: true
-    field :session_id, String.t(), enforce: true
-    field :session_log_path, String.t(), enforce: true
-    field :log_prefix, String.t(), enforce: true
-    field :task_type, String.t(), enforce: true
-    field :gen, integer(), enforce: true
-    field :archived?, boolean(), enforce: true
-    field :os_pid, integer(), enforce: true
-    field :status, String.t(), enforce: true
-    field :created_at, NaiveDateTime.t(), enforce: true
-    field :updated_at, NaiveDateTime.t(), enforce: true
-    field :running_at, NaiveDateTime.t()
-    field :completed_at, NaiveDateTime.t()
-    field :progress_counter, integer()
-    field :progress_total, integer()
-    field :progress_phase, String.t()
-    field :last_message, String.t()
-    field :result, term()
-    field :errors, [term()], default: []
+    plugin(TypedStructEctoChangeset)
+    field(:task_id, String.t(), enforce: true)
+    field(:session_id, String.t(), enforce: true)
+    field(:session_log_path, String.t(), enforce: true)
+    field(:log_prefix, String.t(), enforce: true)
+    field(:task_type, String.t(), enforce: true)
+    field(:gen, integer(), enforce: true)
+    field(:archived?, boolean(), enforce: true)
+    field(:os_pid, integer(), enforce: true)
+    field(:status, String.t(), enforce: true)
+    field(:created_at, NaiveDateTime.t(), enforce: true)
+    field(:updated_at, NaiveDateTime.t(), enforce: true)
+    field(:running_at, NaiveDateTime.t())
+    field(:completed_at, NaiveDateTime.t())
+    field(:progress_counter, integer())
+    field(:progress_total, integer())
+    field(:progress_phase, String.t())
+    field(:last_message, String.t())
+    field(:result, term())
+    field(:errors, [term()], default: [])
   end
 
   def new() do
     nil_values =
       @enforce_keys
       |> Enum.map(fn key -> {key, nil} end)
+
     Kernel.struct(__MODULE__, nil_values)
   end
 
   def required_fields(fields \\ [])
   def required_fields([]), do: @enforce_keys
+
   def required_fields(fields) when is_list(fields) do
-    @enforce_keys -- (@enforce_keys -- fields)
+    @enforce_keys -- @enforce_keys -- fields
   end
 
   def all_fields(), do: Keyword.keys(@changeset_fields)

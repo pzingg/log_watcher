@@ -1,4 +1,16 @@
 defmodule LogWatcher.ScriptServer do
+  @moduledoc """
+  A GenServer that launches long-running POSIX shell scripts (as implemented
+  in Python or R) under an Elixir Task, and can cancel them by sending
+  SIGINT signals. The shell scripts are expected to produce JSON line
+  output on stdout which is captured and parsed when the script (and Elixir
+  Task) terminate.
+
+  We could use Elixir Ports for this work, but this implementation is
+  potentially simpler. Progress and other information from the
+  script is captured by a different process, the `LogWatcher.FileWatcher`.
+  """
+
   use GenServer
 
   require Logger
@@ -6,10 +18,21 @@ defmodule LogWatcher.ScriptServer do
   alias LogWatcher.Tasks.Session
 
   defmodule TaskInfo do
-    defstruct task_id: nil,
+    @enforce_keys [:task, :task_id, :job_id]
+
+    defstruct task: nil,
+              task_id: nil,
               job_id: 0,
               os_pid: 0,
               sigint_pending: false
+
+    @type t() :: %__MODULE__{
+            task: Elixir.Task.t(),
+            task_id: String.t(),
+            job_id: integer(),
+            os_pid: integer(),
+            sigint_pending: boolean()
+          }
   end
 
   defstruct tasks: %{}
@@ -43,6 +66,12 @@ defmodule LogWatcher.ScriptServer do
     GenServer.call(__MODULE__, {:cancel_script, job_id})
   end
 
+  @spec yield_or_shutdown_task(reference(), integer()) ::
+          :ok | {:ok, term()} | {:error, :timeout}
+  def yield_or_shutdown_task(task_ref, timeout) do
+    GenServer.call(__MODULE__, {:yield_or_shutdown, task_ref, timeout})
+  end
+
   @spec send_sigint(String.t(), integer()) :: :ok | {:error, :no_pid}
   def send_sigint(_task_id, 0), do: {:error, :no_pid}
 
@@ -70,11 +99,12 @@ defmodule LogWatcher.ScriptServer do
     # After we start the task, we store its reference and the url it is fetching
     next_state =
       put_in(state.tasks[task.ref], %TaskInfo{
+        task: task,
         task_id: Map.get(start_args, :task_id),
         job_id: Map.get(start_args, :oban_job_id)
       })
 
-    {:reply, task, next_state}
+    {:reply, task.ref, next_state}
   end
 
   def handle_call({:update_os_pid, task_ref, os_pid}, _from, state) do
@@ -134,21 +164,58 @@ defmodule LogWatcher.ScriptServer do
     end
   end
 
-  @impl true
-  def handle_info({ref, result}, state) do
-    # The task succeeded so we can cancel the monitoring and discard the DOWN message
-    Process.demonitor(ref, [:flush])
+  def handle_call({:yield_or_shutdown, task_ref, timeout}, _from, state) do
+    Logger.info("ScriptServer yielding to script task #{inspect(task_ref)}...")
 
-    {%TaskInfo{task_id: task_id}, next_state} = pop_in(state.tasks[ref])
+    case Map.get(state.tasks, task_ref) do
+      %TaskInfo{task: task} ->
+        # The task succeeded so we can cancel the monitoring and discard the DOWN message
+        Process.demonitor(task_ref, [:flush])
+        next_state = %__MODULE__{state | tasks: Map.delete(state.tasks, task_ref)}
+
+        case Elixir.Task.yield(task, timeout) || Elixir.Task.shutdown(task) do
+          {:ok, result} ->
+            case result do
+              :ok ->
+                Logger.info("ScriptServer after yield, script task returned :ok")
+                {:reply, :ok, next_state}
+
+              _ ->
+                Logger.info("ScriptServer after yield, script task returned #{inspect(result)}")
+                {:reply, {:ok, result}, next_state}
+            end
+
+          nil ->
+            Logger.warn("ScriptServer after yield, failed to get a result from script task in #{timeout}ms")
+            {:reply, {:error, :timeout}, next_state}
+        end
+
+      _ ->
+        Logger.error("ScriptServer task_ref not found")
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  @impl true
+  def handle_info({task_ref, result}, state) do
+    # The task succeeded so we can cancel the monitoring and discard the DOWN message
+    Process.demonitor(task_ref, [:flush])
+
+    {%TaskInfo{task_id: task_id}, next_state} = pop_in(state.tasks[task_ref])
     Logger.error("ScriptServer task #{task_id} got #{inspect(result)}")
     {:noreply, next_state}
   end
 
-  def handle_info({:DOWN, ref, _, _, reason}, state) do
-    {%TaskInfo{task_id: task_id}, next_state} = pop_in(state.tasks[ref])
+  def handle_info({:DOWN, task_ref, _, _, reason}, state) do
+    {%TaskInfo{task_id: task_id}, next_state} = pop_in(state.tasks[task_ref])
 
     Logger.error("ScriptServer task #{task_id} failed with reason #{inspect(reason)}")
     {:noreply, next_state}
+  end
+
+  def handle_info({:EXIT, pid, reason}, state) do
+    Logger.error("ScriptServer :EXIT #{inspect(pid)} with reason #{inspect(reason)}")
+    {:noreply, state}
   end
 
   @spec find_task_by_job_id(String.t(), t()) :: {reference(), TaskInfo.t()} | nil

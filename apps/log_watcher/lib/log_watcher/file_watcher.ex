@@ -1,7 +1,39 @@
 defmodule LogWatcher.FileWatcher do
   @moduledoc """
-  A GenServer that monitors a directory, and can add individual files to be
-  watched for modifications or closes.
+  A GenServer that monitors a directory for file system changes,
+  and broadcasts progress over Elixir PubSub. The directory, called
+  the "session_log_path" is identified by a "session_id" that defines
+  the well-known PubSub topic, `session:session_id`.
+
+  Once started, clients of the server add individual files to be
+  watched for file modifications using the Elixir `FileSystem`
+  module, which uses POSIX inotify tools.
+
+  The files being watched are expected to produce output as JSON lines.
+
+  An Elixir `File.Stream` is opened on each file being watched.
+  If a file modification is detected, the server reads the new output
+  from the stream, parses each JSON line, and broadcasts the parsed
+  object on the PubSub session topic. A decoded line in the log file
+  is expected to be an Elixir map that includes a `:status` item.
+  The `:status` value is expected to be a string with one of these values:
+  "initializing" "created", "reading", "validating", "running",
+  "cancelled" or "completed". If the `:status` item is missing,
+  it will be set to "undefined".
+
+  A `:task_updated` message is sent for each line successfully parsed
+  from the file being watched.
+
+  A `:task_started` message is sent for the first line that has a
+  status of "running", "cancelled" or "completed".
+
+  A `:task_completed` message is sent for each line that has a status
+  of "cancelled" or "completed", but this is expected to happen
+  at most one time.
+
+  The payload for each of these messages is the file name (without
+  the path) that produced the change, and the map that was parsed,
+  containing at a minimum the `:session_id` and `:status` items.
   """
   use GenServer
 
@@ -319,27 +351,39 @@ defmodule LogWatcher.FileWatcher do
 
     Logger.info("FileWatcher got #{Enum.count(lines)} line(s) from #{file_name}")
 
-    topic = Session.events_topic(session_id)
+    Enum.reduce(lines, file, fn line, acc -> broadcast_changes(session_id, file_name, line, acc) end)
+  end
 
-    Enum.reduce(lines, file, fn line, %WatchedFile{start_sent: start_sent} = acc ->
-      %{status: status} = info = Jason.decode!(line, keys: :atoms)
-      # Logger.info("FileWatcher start_sent #{start_sent} status #{info[:status]}")
+  @spec broadcast_changes(String.t(), String.t(), String.t(), WatchedFile.t()) :: WatchedFile.t()
+  defp broadcast_changes(session_id, file_name, line, %WatchedFile{start_sent: start_sent} = file) do
+    case Jason.decode(line, keys: :atoms) do
+      {:ok, data} when is_map(data) ->
+        info =
+          data
+          |> Map.put_new(:session_id, session_id)
+          |> Map.put_new(:status, "undefined")
 
-      Session.broadcast(topic, {:task_updated, file_name, info})
+        topic = Session.events_topic(info.session_id)
 
-      next_acc =
-        if !start_sent && Enum.member?(@task_started_status, status) do
-          Session.broadcast(topic, {:task_started, file_name, info})
-          %WatchedFile{acc | start_sent: true}
-        else
-          acc
+        Session.broadcast(topic, {:task_updated, file_name, info})
+
+        next_file =
+          if !start_sent && Enum.member?(@task_started_status, info.status) do
+            Session.broadcast(topic, {:task_started, file_name, info})
+            %WatchedFile{file | start_sent: true}
+          else
+            file
+          end
+
+        if Enum.member?(@task_completed_status, info.status) do
+          Session.broadcast(topic, {:task_completed, file_name, info})
         end
 
-      if Enum.member?(@task_completed_status, status) do
-        Session.broadcast(topic, {:task_completed, file_name})
-      end
+        next_file
 
-      next_acc
-    end)
+      _ ->
+        Logger.error("FileWatcher, ignoring non-JSON: #{line}")
+        file
+    end
   end
 end

@@ -9,7 +9,6 @@ defmodule LogWatcher.MockTaskTest do
   @oban_exec_timeout 30_000
   @script_timeout 10_000
 
-  @tag :skip
   @tag :start_oban
   test "01 queues and runs an Oban job", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
@@ -46,7 +45,6 @@ defmodule LogWatcher.MockTaskTest do
     Process.sleep(@script_timeout)
   end
 
-  @tag :skip
   @tag :start_oban
   test "02 runs a mock task under Oban", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
@@ -66,8 +64,8 @@ defmodule LogWatcher.MockTaskTest do
     }
 
     start_result = perform_job(LogWatcher.TaskStarter, args)
-    task = assert_script_started(start_result, task_id)
-    {:ok, _} = wait_on_script_task(task, @script_timeout)
+    task_ref = assert_script_started(start_result, task_id)
+    {:ok, _} = wait_on_script_task(task_ref, @script_timeout)
   end
 
   @tag :start_oban

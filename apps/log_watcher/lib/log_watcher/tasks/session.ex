@@ -2,6 +2,12 @@ defmodule LogWatcher.Tasks.Session do
   @moduledoc """
   Defines a Session struct for use with schemaless changesets.
   Sessions are not stored in a SQL database.
+
+  A session represents a directory on the file system that will
+  contain the executable scripts, data and log files necessary to
+  perform long running tasks.  Each session has a required
+  `:name` and `:description`, and a unique ID, the `:session_id`
+  (usually a UUID or ULID).
   """
 
   use TypedStruct

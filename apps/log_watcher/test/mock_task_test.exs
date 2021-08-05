@@ -5,6 +5,8 @@ defmodule LogWatcher.MockTaskTest do
   alias LogWatcher.{Tasks, TaskStarter}
   alias LogWatcher.Tasks.Session
 
+  @script_timeout 10_000
+
   test "01 runs a Python mock task", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       fake_task_args(context, script_file: "mock_task.py")
@@ -12,8 +14,8 @@ defmodule LogWatcher.MockTaskTest do
     archive_existing_tasks(session)
 
     start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
-    task = assert_script_started(start_result, task_id)
-    {:ok, _} = wait_on_script_task(task, 30_000)
+    task_ref = assert_script_started(start_result, task_id)
+    {:ok, _} = wait_on_script_task(task_ref, @script_timeout)
   end
 
   test "02 runs an Rscript mock task", context do
@@ -23,8 +25,8 @@ defmodule LogWatcher.MockTaskTest do
     archive_existing_tasks(session)
 
     start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
-    task = assert_script_started(start_result, task_id)
-    {:ok, _} = wait_on_script_task(task, 30_000)
+    task_ref = assert_script_started(start_result, task_id)
+    {:ok, _} = wait_on_script_task(task_ref, @script_timeout)
   end
 
   test "03 mock task fails in initializing phase", context do
@@ -34,8 +36,8 @@ defmodule LogWatcher.MockTaskTest do
     archive_existing_tasks(session)
 
     start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
-    task = assert_script_errors(start_result, task_id, "initializing")
-    assert is_nil(task)
+    task_ref = assert_script_errors(start_result, task_id, "initializing")
+    assert is_nil(task_ref)
   end
 
   test "04 mock task fails in reading phase", context do
@@ -45,8 +47,8 @@ defmodule LogWatcher.MockTaskTest do
     archive_existing_tasks(session)
 
     start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
-    task = assert_script_errors(start_result, task_id, "reading")
-    {:ok, _} = wait_on_script_task(task, 30_000)
+    task_ref = assert_script_errors(start_result, task_id, "reading")
+    {:ok, _} = wait_on_script_task(task_ref, @script_timeout)
   end
 
   test "05 mock task fails in started phase", context do
@@ -56,8 +58,8 @@ defmodule LogWatcher.MockTaskTest do
     archive_existing_tasks(session)
 
     start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
-    task = assert_script_errors(start_result, task_id, "started")
-    {:ok, _} = wait_on_script_task(task, 30_000)
+    task_ref = assert_script_errors(start_result, task_id, "started")
+    {:ok, _} = wait_on_script_task(task_ref, @script_timeout)
   end
 
   test "06 mock task fails in validating phase", context do
@@ -67,8 +69,8 @@ defmodule LogWatcher.MockTaskTest do
     archive_existing_tasks(session)
 
     start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
-    task = assert_script_errors(start_result, task_id, "validating")
-    {:ok, _} = wait_on_script_task(task, 30_000)
+    task_ref = assert_script_errors(start_result, task_id, "validating")
+    {:ok, _} = wait_on_script_task(task_ref, @script_timeout)
   end
 
   test "07 mock task fails in running phase", context do
@@ -78,19 +80,19 @@ defmodule LogWatcher.MockTaskTest do
     archive_existing_tasks(session)
 
     start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
-    task = assert_script_started(start_result, task_id)
-    {:ok, _} = wait_on_script_task(task, 30_000)
+    task_ref = assert_script_started(start_result, task_id)
+    {:ok, _} = wait_on_script_task(task_ref, @script_timeout)
   end
 
   test "08 sends SIGINT to cancel a mock task", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
-      fake_task_args(context, script_file: "mock_task.R", cancel_test: true)
+      fake_task_args(context, oban_job_id: 100, script_file: "mock_task.R", cancel_test: true)
 
     archive_existing_tasks(session)
 
     start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
-    task = assert_script_errors(start_result, task_id, "reading", "cancelled")
-    {:ok, _} = wait_on_script_task(task, 30_000)
+    task_ref = assert_script_errors(start_result, task_id, "reading", "cancelled")
+    {:ok, _} = wait_on_script_task(task_ref, @script_timeout)
   end
 
   test "09 finds the running task", context do
@@ -99,7 +101,7 @@ defmodule LogWatcher.MockTaskTest do
 
     archive_existing_tasks(session)
 
-    {:ok, %{script_task: task}} =
+    {:ok, %{task_ref: task_ref}} =
       TaskStarter.watch_and_run(session, task_id, task_type, task_args)
 
     task_list = Tasks.list_tasks(session)
@@ -110,7 +112,7 @@ defmodule LogWatcher.MockTaskTest do
     assert found_task.gen == session.gen
     assert found_task.status == "running"
 
-    wait_on_script_task(task, 30_000)
+    wait_on_script_task(task_ref, @script_timeout)
 
     task_list = Tasks.list_tasks(session)
     assert Enum.count(task_list) == 1

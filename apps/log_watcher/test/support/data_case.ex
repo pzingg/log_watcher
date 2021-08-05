@@ -16,7 +16,7 @@ defmodule LogWatcher.DataCase do
 
   use ExUnit.CaseTemplate
 
-  alias LogWatcher.{Tasks, TaskStarter}
+  alias LogWatcher.Tasks
   alias LogWatcher.Tasks.Session
 
   require Logger
@@ -67,26 +67,26 @@ defmodule LogWatcher.DataCase do
     end)
   end
 
-  @spec assert_script_started(term(), String.t()) :: {Elixir.Task.t(), [term()]}
+  @spec assert_script_started(term(), String.t()) :: {reference(), [term()]}
   def assert_script_started(start_result, task_id) do
-    {:ok, %{task_id: job_task_id, status: status, message: message, script_task: task}} =
+    {:ok, %{task_id: job_task_id, status: status, message: message, task_ref: task_ref}} =
       start_result
 
     assert job_task_id == task_id
     assert status == "running"
     assert String.contains?(message, "running on line")
-    task
+    task_ref
   end
 
   @spec assert_script_errors(term(), String.t(), String.t(), String.t()) ::
-          {Elixir.Task.t(), [term()]}
+          {reference(), [term()]}
   def assert_script_errors(
         start_result,
         task_id,
         expected_category,
         expected_status \\ "completed"
       ) do
-    {:ok, %{task_id: job_task_id, status: status, message: message, script_task: task} = info} =
+    {:ok, %{task_id: job_task_id, status: status, message: _message, task_ref: task_ref} = info} =
       start_result
 
     assert job_task_id == task_id
@@ -96,19 +96,13 @@ defmodule LogWatcher.DataCase do
     first_error = hd(errors)
     assert !is_nil(first_error)
     assert first_error.category == expected_category
-    task
+    task_ref
   end
 
-  @spec wait_on_script_task(term(), integer()) :: {:ok, term()} | {:error, :timeout}
-  def wait_on_script_task({:ok, %{script_task: %Elixir.Task{} = task}}, timeout) do
-    TaskStarter.yield_or_shutdown_task(task, timeout)
+  @spec wait_on_script_task(reference(), integer()) :: {:ok, term()} | {:error, :timeout}
+  def wait_on_script_task(task_ref, timeout) when is_reference(task_ref) do
+    LogWatcher.ScriptServer.yield_or_shutdown_task(task_ref, timeout)
   end
-
-  def wait_on_script_task(%Elixir.Task{} = task, timeout) do
-    TaskStarter.yield_or_shutdown_task(task, timeout)
-  end
-
-  def wait_on_script_task(other, _timeout), do: other
 
   @spec wait_on_os_process(integer(), integer()) :: :ok | {:error, :timeout}
   def wait_on_os_process(os_pid, timeout) do

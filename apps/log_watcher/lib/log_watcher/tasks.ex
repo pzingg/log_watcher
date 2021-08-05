@@ -1,6 +1,6 @@
 defmodule LogWatcher.Tasks do
   @moduledoc """
-  Context for managing tasks, which are started by Oban.Jobs.
+  A context for managing Oban jobs, sessions and tasks.
   """
   import Ecto.Query
 
@@ -90,6 +90,7 @@ defmodule LogWatcher.Tasks do
   defp maybe_init_session_log({:ok, %Session{} = session}) do
     Session.write_event(session, :create_session)
   end
+
   defp maybe_init_session_log(other), do: other
 
   @spec update_session(Session.t(), map()) ::

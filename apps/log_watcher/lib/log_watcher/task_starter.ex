@@ -1,4 +1,19 @@
 defmodule LogWatcher.TaskStarter do
+  @moduledoc """
+  This module implements the Oban.Worker behaviour, but can be used outside
+  of the Oban job processing system. The module is responsible for
+  setting up a monitoring system for long-running POSIX shell scripts
+  that operate in a pre-defined directory on the file system.
+  The scripts conform to a defined protocol for reading input
+  from an arguments file and producing progress and result output
+  in log files. The arguments file and log files have well-known names.
+
+  As scripts run and produce output, progress log files are monitored
+  by a separate process, the `LogWatcher.FileWatcher`.
+
+  Scripts are launched and signaled through a third process, the
+  `LogWatcher.ScriptServer`.
+  """
   use Oban.Worker, queue: :tasks
 
   require Logger
@@ -7,20 +22,22 @@ defmodule LogWatcher.TaskStarter do
   alias LogWatcher.Tasks.{Session, Task}
 
   defmodule LoopInfo do
-    @enforce_keys [:task_id, :job_id, :elixir_task, :cancel_test, :expiry]
+    @enforce_keys [:expiry, :job_id, :task_id, :task_ref, :cancel_test]
 
-    defstruct task_id: nil,
+    defstruct expiry: 0,
               job_id: 0,
-              elixir_task: nil,
+              task_id: nil,
+              task_ref: nil,
               cancel_test: false,
-              expiry: 0
+              sent_os_pid: false
 
     @type t() :: %__MODULE__{
-            task_id: String.t(),
+            expiry: integer(),
             job_id: integer(),
-            elixir_task: Elixir.Task.t(),
+            task_id: String.t(),
+            task_ref: Elixir.Task.t(),
             cancel_test: boolean(),
-            expiry: integer()
+            sent_os_pid: boolean()
           }
   end
 
@@ -131,18 +148,18 @@ defmodule LogWatcher.TaskStarter do
     script_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", script_file])
     Logger.info("task #{task_id}: run script at #{script_path}")
 
-    script_task = LogWatcher.ScriptServer.run_script(script_path, start_args)
+    task_ref = LogWatcher.ScriptServer.run_script(script_path, start_args)
 
     # Process incoming messages to find a result
-    Logger.info("task #{task_id}: script task ref is #{inspect(script_task.ref)}")
+    Logger.info("task #{task_id}: script task ref is #{inspect(task_ref)}")
     Logger.error("task #{task_id}: starting loop")
 
     task_info = %LoopInfo{
+      expiry: System.monotonic_time(:millisecond) + script_timeout,
       job_id: job_id,
       task_id: task_id,
-      elixir_task: script_task,
-      cancel_test: cancel_test,
-      expiry: System.monotonic_time(:millisecond) + script_timeout
+      task_ref: task_ref,
+      cancel_test: cancel_test
     }
 
     result = loop(task_info)
@@ -169,26 +186,6 @@ defmodule LogWatcher.TaskStarter do
     end
   end
 
-  @spec yield_or_shutdown_task(Elixir.Task.t(), integer()) ::
-          :ok | {:ok, term()} | {:error, :timeout}
-  def yield_or_shutdown_task(task, timeout) do
-    Logger.info("#{inspect(self())} yielding to script task...")
-
-    case Elixir.Task.yield(task, timeout) || Elixir.Task.shutdown(task) do
-      {:ok, :ok} ->
-        Logger.info("after yield, script task returned :ok")
-        :ok
-
-      {:ok, result} ->
-        Logger.info("after yield, script task returned #{inspect(result)}")
-        {:ok, result}
-
-      nil ->
-        Logger.warn("after yield, failed to get a result from script task in #{timeout}ms")
-        {:error, :timeout}
-    end
-  end
-
   @spec loop(LoopInfo.t()) ::
           {:ok, map()}
           | {:error,
@@ -201,7 +198,7 @@ defmodule LogWatcher.TaskStarter do
 
   Returns `{:ok, result}` if the task entered the running phase without errors.
   The `result` is a map that contains information about the task,
-  and `result.script_task` is an Elixir Task struct.
+  and `result.task_ref` is a reference to the Elixir Task.
 
   Returns `{:error, {:EXIT, pid, reason}}` if our process was sent an
   abnormal exit message.
@@ -224,11 +221,12 @@ defmodule LogWatcher.TaskStarter do
   """
   def loop(
         %LoopInfo{
+          expiry: expiry,
           job_id: job_id,
           task_id: task_id,
-          elixir_task: %Elixir.Task{ref: task_ref} = task,
+          task_ref: task_ref,
           cancel_test: cancel_test,
-          expiry: expiry
+          sent_os_pid: sent_os_pid
         } = info
       ) do
     time_now = System.monotonic_time(:millisecond)
@@ -237,13 +235,13 @@ defmodule LogWatcher.TaskStarter do
     receive do
       {:task_started, file_name, info} ->
         Logger.info("task #{task_id}, loop received :task_started on #{file_name}")
-        result = Map.merge(info, %{script_task: task})
+        result = Map.merge(info, %{task_ref: task_ref})
         Logger.info("task #{task_id}, loop returning :ok #{inspect(result)}")
         {:ok, result}
 
       {:script_terminated, info} ->
         Logger.error("task #{task_id}, loop received :script_terminated, #{inspect(info)}")
-        result = Map.merge(info, %{script_task: nil})
+        result = Map.merge(info, %{task_ref: nil})
         Logger.info("task #{task_id}, loop returning :ok #{inspect(result)}")
         {:ok, result}
 
@@ -257,22 +255,26 @@ defmodule LogWatcher.TaskStarter do
         Logger.info("task #{task_id}, loop returning :script_crashed")
         {:error, {:script_crashed, reason}}
 
-      {:task_updated, file_name, info} ->
+      {:task_updated, file_name, update_info} ->
         Logger.info("task #{task_id}, loop received :task_updated on #{file_name}")
 
-        {next_info, os_pid} =
-          case Map.fetch!(info, :os_pid) do
-            0 ->
-              {info, 0}
+        next_info =
+          case {Map.get(update_info, :os_pid, 0), sent_os_pid} do
+            {0, _} ->
+              info
 
-            os_pid ->
+            {os_pid, false} ->
               _ = LogWatcher.ScriptServer.update_os_pid(task_ref, os_pid)
-              {%LoopInfo{info | cancel_test: false}, os_pid}
-          end
 
-        if cancel_test && os_pid != 0 do
-          _ = LogWatcher.ScriptServer.cancel_script(job_id)
-        end
+              if cancel_test do
+                _ = LogWatcher.ScriptServer.cancel_script(job_id)
+              end
+
+              %LoopInfo{info | cancel_test: false, sent_os_pid: true}
+
+            _ ->
+              info
+          end
 
         Logger.info("task #{task_id}: re-entering loop")
         loop(next_info)
