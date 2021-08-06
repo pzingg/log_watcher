@@ -53,23 +53,46 @@ defmodule LogWatcher.ScriptServer do
     :gen
   ]
 
+  @doc """
+  Public interface. Start a linked GenServer.
+  """
   def start_link(opts) do
     GenServer.start_link(__MODULE__, :ok, opts)
   end
 
+  @doc """
+  Public interface. Launch and monitor a shell script.
+  """
+  @spec run_script(String.t(), map()) :: reference()
   def run_script(script_path, start_args) do
     GenServer.call(__MODULE__, {:run_script, script_path, start_args})
   end
 
+  @doc """
+  Public interface. Update the GenServer, to associate the POSIX process id
+  of the running script with the Elixir task that launched the script
+  (similar to an Elixir Port).
+  """
+  @spec update_os_pid(reference(), integer()) :: :ok | {:error, :not_found}
   def update_os_pid(task_ref, os_pid) do
     GenServer.call(__MODULE__, {:update_os_pid, task_ref, os_pid})
   end
 
+  @doc """
+  Public interface. Send a SIGINT signal to the POSIX process via a "kill"
+  shell command. If the POSIX process id has not been read yet, the signal
+  will be sent as soon as the process id is set. The argument can be either
+  the Elixir Task reference, or the Oban job id associated with the task.
+  """
   @spec cancel_script(reference() | integer()) :: :ok | {:error, :not_found}
   def cancel_script(task_ref_or_job_id) do
     GenServer.call(__MODULE__, {:cancel_script, task_ref_or_job_id})
   end
 
+  @doc """
+  Public interface. Wait for the Elixir Task to complete, or send the Task's
+  process an exit signal.
+  """
   @spec yield_or_shutdown_task(reference(), integer()) ::
           :ok | {:ok, term()} | {:error, :timeout}
   def yield_or_shutdown_task(task_ref, timeout) do
@@ -247,7 +270,7 @@ defmodule LogWatcher.ScriptServer do
     {:noreply, state}
   end
 
-  @spec find_task_by_job_id(String.t(), t()) :: {reference(), TaskInfo.t()} | nil
+  @spec find_task_by_job_id(integer(), t()) :: {reference(), TaskInfo.t()} | nil
   defp find_task_by_job_id(job_id, state) do
     Enum.find(state.tasks, fn
       {_ref, %TaskInfo{job_id: ^job_id}} -> true
@@ -255,6 +278,7 @@ defmodule LogWatcher.ScriptServer do
     end)
   end
 
+  @spec handle_cancel(reference(), TaskInfo.t(), t()) :: {:reply, :pending | :ok, t()}
   defp handle_cancel(task_ref, %TaskInfo{task_id: task_id, os_pid: os_pid} = info, state) do
     case os_pid do
       0 ->

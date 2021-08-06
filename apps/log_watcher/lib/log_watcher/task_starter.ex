@@ -35,7 +35,7 @@ defmodule LogWatcher.TaskStarter do
             expiry: integer(),
             job_id: integer(),
             task_id: String.t(),
-            task_ref: Elixir.Task.t(),
+            task_ref: reference(),
             cancel: String.t(),
             sent_os_pid: boolean()
           }

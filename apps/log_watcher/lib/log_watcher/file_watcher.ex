@@ -96,7 +96,8 @@ defmodule LogWatcher.FileWatcher do
   Public interface. Subscribe to task messages, start the GenServer for a session,
   and watch a log file.
   """
-  @spec start_link_and_watch_file(String.t(), String.t(), String.t()) :: :ok
+
+  @spec start_link_and_watch_file(String.t(), String.t(), String.t()) :: :ignore | {:ok, pid()} | {:error, term()}
   def start_link_and_watch_file(session_id, session_log_path, log_file) do
     with {:ok, pid} <- start_or_find_link(session_id, session_log_path),
          {:ok, _file} <- add_watch(session_id, log_file) do
@@ -181,9 +182,7 @@ defmodule LogWatcher.FileWatcher do
     {:n, :l, {:session_id, session_id}}
   end
 
-  @doc """
-  Init callback. Returns the initial state, but continues with a :check message.
-  """
+  @doc false
   @impl true
   @spec init(term()) :: {:ok, state()}
   def init([session_id, session_log_path] = arg) do

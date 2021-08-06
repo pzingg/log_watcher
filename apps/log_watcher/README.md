@@ -1,11 +1,16 @@
 # LogWatcher
 
-Consists of an Oban-compatible `TaskStarter` worker module that can
-shell out to Rscripts which produce JSON-formatted log files.
+The application provides an Oban-compatible `LogWatcher.TaskStarter` worker 
+module that can start long-running shell scripts, which produce JSON-formatted 
+log files.
 
-Meanwhile the `FileWatcher` module uses inotify tools to monitor
-the primary task log file for changes and broadcasts events on
-a session topic.
+Meanwhile the `LogWatcher.FileWatcher` GenServer uses inotify tools to monitor
+changes in the log files that the scripts produce, and broadcasts these changes
+as messages on a PubSub topic.
+
+`LogWatcher.TaskStarter` invokes commands on a `LogWatcher.ScriptServer`
+GenServer to launch, cancel and wait on the shell scripts as needed.
+
 
 ## Sessions and Tasks
 
@@ -127,8 +132,8 @@ generated while the task is running, convert it into
 a structured error, set the task status to "completed", 
 and exit.
 
-The Python and Rscript examples also trap the SIGINT
-Unix process signal, convert it into a structured error,
+The Python and Rscript examples also trap the POSIX SIGINT 
+process signal, convert it into a structured error,
 set the task status to "cancelled", and exit. 
 
 There is testing support on the Elixir side to generate
@@ -143,12 +148,12 @@ run.
 Note: Oban will send an exit signal to a running worker when
 a job is canceled, but only if PostgreSQL notifications are 
 active. In the test environment, we must manually send a 
-"cancel_script" message to the `LogWatcher.ScriptServer`.
+`cancel_script` command to the `LogWatcher.ScriptServer`.
 
 
 ## Oban compatibility
 
-The `TaskStarter` module implements the `Oban.Worker`
+The `LogWatcher.TaskStarter` module implements the `Oban.Worker`
 behaviour, so that a `LogWatcher.Tasks.Task` can be
 started using Oban's scheduling sytem. Tasks that
 encounter exceptions or script-generated errors, return an 
@@ -163,7 +168,7 @@ so that Oban will not attempt to re-run them.
 
 ![log_watcher_tree.png](log_watcher_tree.png)
 
-This tree below annotates the diagram above.
+The tree below annotates the PIDs in the diagram above.
 
 ```
 0.322.0 - application_master.init
