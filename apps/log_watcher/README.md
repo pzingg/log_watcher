@@ -161,8 +161,11 @@ so that Oban will not attempt to re-run them.
 
 ## Supervision tree and processes
 
-Refer to [log_watcher_tree.png](log_watcher_tree.png) diagram.
+![log_watcher_tree.png](log_watcher_tree.png)
 
+This tree below annotates the diagram above.
+
+```
 0.322.0 - application_master.init
   0.323.0 - application_master.start_it
     LogWatcher.Supervisor
@@ -190,3 +193,4 @@ Refer to [log_watcher_tree.png](log_watcher_tree.png) diagram.
       LogWatcher.ScriptServer
       LogWatcher.TaskSupervisor
         0.427.0 - Task [monitored by LogWatcher.ScriptServer]
+```
