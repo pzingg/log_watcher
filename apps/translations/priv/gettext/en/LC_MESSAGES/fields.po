@@ -11,4 +11,4 @@ msgstr ""
 "Language: en\n"
 
 msgid "session_log_path"
-msgstr "The log path"
+msgstr "the log path"

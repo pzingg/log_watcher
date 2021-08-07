@@ -15,9 +15,8 @@ defmodule Translations do
   def changeset_error_messages(changeset) do
     Ecto.Changeset.traverse_errors(changeset, &Translations.translate_error(&1))
     |> Enum.map(fn {field, errors} ->
-      Enum.map(errors, fn error ->
-        Translations.humanize_field(field) <> " " <> error <> "."
-      end)
+      field_str = humanize_field(field) |> String.capitalize()
+      Enum.map(errors, fn error -> field_str <> " " <> error <> "." end)
     end)
   end
 
@@ -26,6 +25,7 @@ defmodule Translations do
   an error message, using the plural message if a `%{count}` binding
   is included.
   """
+  @spec translate_error({String.t(), Keyword.t()}) :: String.t()
   def translate_error({msg, opts}) do
     # When using gettext, we typically pass the strings we want
     # to translate as a static argument:
@@ -52,23 +52,40 @@ defmodule Translations do
   end
 
   @doc """
-  Copied from Phoenix.HTML module. Upcase a field name (either an
-  atom or a string), changing underscores to spaces and removing
-  any "_id" suffix.
+  Interpolate the bindings (e.g. `%{count}`) of a Changeset error into
+  an error message.
+  """
+  @spec translate_error_without_gettext({String.t(), Keyword.t()}) :: String.t()
+  def translate_error_without_gettext({msg, opts}) do
+    Enum.reduce(opts, msg, fn {key, value}, acc ->
+      String.replace(acc, "%{#{key}}", to_string(value))
+    end)
+  end
+
+  @doc """
+  Use `gettext` to possibly customize a field name, then remove trailing
+  "_id" strings and replace underscores with spaces.
   """
   @spec humanize_field(atom() | binary()) :: String.t()
   def humanize_field(atom) when is_atom(atom), do: humanize_field(Atom.to_string(atom))
 
   def humanize_field(bin) when is_binary(bin) do
-    bin =
-      if String.ends_with?(bin, "_id") do
-        binary_part(bin, 0, byte_size(bin) - 3)
-      else
-        bin
-      end
+    next_bin =
+      Gettext.dgettext(Translations.Gettext, "fields", bin)
+      |> String.trim_trailing("_id")
 
-    Gettext.dgettext(Translations.Gettext, "fields", bin)
-    |> String.replace("_", " ")
-    |> String.capitalize()
+    Regex.replace(~r/_+/, next_bin, " ")
+  end
+
+  @doc """
+  Copied from Phoenix.HTML module. Remove trailing "_id" string from a field
+  name, and replace underscores with spaces.
+  """
+  @spec humanize_field_without_gettext(atom() | binary()) :: String.t()
+  def humanize_field_without_gettext(atom) when is_atom(atom),
+    do: humanize_field_without_gettext(Atom.to_string(atom))
+
+  def humanize_field_without_gettext(bin) when is_binary(bin) do
+    Regex.replace(~r/_+/, String.trim_trailing(bin, "_id"), " ")
   end
 end

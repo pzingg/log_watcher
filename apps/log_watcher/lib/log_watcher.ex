@@ -61,37 +61,6 @@ defmodule LogWatcher do
   def maybe_raise_input_error({:ok, data}, _label, _id_field), do: data
 
   @doc """
-  Interpolate the bindings (e.g. `%{count}`) of a Changeset error into
-  an error message.
-  """
-  @spec translate_error_without_gettext({String.t(), Keyword.t()}) :: String.t()
-  def translate_error_without_gettext({msg, opts}) do
-    Enum.reduce(opts, msg, fn {key, value}, acc ->
-      String.replace(acc, "%{#{key}}", to_string(value))
-    end)
-  end
-
-  @doc """
-  Copied from Phoenix.HTML module. Upcase a field name (either an
-  atom or a string), changing underscores to spaces and removing
-  any "_id" suffix.
-  """
-  @spec humanize_field_without_gettext(atom() | binary()) :: String.t()
-  def humanize_field_without_gettext(atom) when is_atom(atom),
-    do: humanize_field_without_gettext(Atom.to_string(atom))
-
-  def humanize_field_without_gettext(bin) when is_binary(bin) do
-    bin =
-      if String.ends_with?(bin, "_id") do
-        binary_part(bin, 0, byte_size(bin) - 3)
-      else
-        bin
-      end
-
-    bin |> String.replace("_", " ") |> String.capitalize()
-  end
-
-  @doc """
   Create a random LogWatcher session and task, and run the task.
   Useful for observing the supervision tree (Hint: use `num_lines: 200`
   to generate a longer running task).

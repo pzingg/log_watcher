@@ -28,9 +28,14 @@ defmodule Translations.ErrorMessageTest do
     end
   end
 
+  test "humanizes a field name that has underscores" do
+    text = Translations.humanize_field(:private__session_id)
+    assert text == "private session"
+  end
+
   test "humanizes a field name using gettext" do
     text = Translations.humanize_field(:session_log_path)
-    assert text == "The log path"
+    assert text == "the log path"
   end
 
   test "translates an error message using gettext" do
