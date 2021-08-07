@@ -87,10 +87,18 @@ defmodule LogWatcher.DataCase do
     task_ref
   end
 
-  @spec wait_on_script_task(reference(), integer()) :: {:ok, term()} | {:error, :timeout}
+  @spec wait_on_script_task(reference() | integer(), integer()) ::
+          {:ok, term()} | {:error, :timeout}
   def wait_on_script_task(task_ref, timeout) when is_reference(task_ref) do
-    _ = Logger.error("wait_on_script_task #{inspect(task_ref)}")
+    _ = Logger.error("wait_on_script_task task_ref #{inspect(task_ref)}")
     result = LogWatcher.ScriptServer.yield_or_shutdown_task(task_ref, timeout)
+    _ = Logger.error("wait_on_script_task returned #{inspect(result)}")
+    result
+  end
+
+  def wait_on_script_task(job_id, timeout) when is_integer(job_id) do
+    _ = Logger.error("wait_on_script_task job #{job_id}")
+    result = LogWatcher.ScriptServer.yield_or_shutdown_task(job_id, timeout)
     _ = Logger.error("wait_on_script_task returned #{inspect(result)}")
     result
   end

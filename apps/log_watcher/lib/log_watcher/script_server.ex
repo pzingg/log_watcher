@@ -93,7 +93,7 @@ defmodule LogWatcher.ScriptServer do
   Public interface. Wait for the Elixir Task to complete, or send the Task's
   process an exit signal.
   """
-  @spec yield_or_shutdown_task(reference(), integer()) ::
+  @spec yield_or_shutdown_task(reference() | integer(), integer()) ::
           :ok | {:ok, term()} | {:error, :timeout}
   def yield_or_shutdown_task(task_ref, timeout) do
     # Prevent this by specifying (timeout + 100) in the GenServer.call:
@@ -182,28 +182,28 @@ defmodule LogWatcher.ScriptServer do
     end
   end
 
-  def handle_call({:yield_or_shutdown, task_ref, timeout}, from, state) do
+  def handle_call({:yield_or_shutdown, task_ref, timeout}, from, state)
+      when is_reference(task_ref) do
     case Map.get(state.tasks, task_ref) do
-      %TaskInfo{yield_client: yield_client} when is_pid(yield_client) ->
-        _ = Logger.error("ScriptServer :yield_or_shutdown already shutting down")
-        {:reply, {:error, :shutting_down}, state}
+      nil ->
+        _ =
+          Logger.error("ScriptServer :yield_or_shutdown task_ref #{inspect(task_ref)} not found")
 
-      %TaskInfo{} = info ->
-        _ = Logger.info("ScriptServer :yield_or_shutdown")
-        _ = Process.send_after(self(), {:yield_timeout, task_ref}, timeout)
-
-        next_state =
-          put_in(
-            state.tasks[task_ref],
-            %TaskInfo{info | yield_client: from}
-          )
-
-        _ = Logger.info("next state is now #{inspect(next_state)}")
-        {:noreply, next_state}
-
-      _ ->
-        _ = Logger.error("ScriptServer :yield_or_shutdown task_ref not found")
         {:reply, {:error, :not_found}, state}
+
+      info ->
+        handle_yield_or_shutdown(task_ref, info, timeout, from, state)
+    end
+  end
+
+  def handle_call({:yield_or_shutdown, job_id, timeout}, from, state) when is_integer(job_id) do
+    case find_task_by_job_id(job_id, state) do
+      nil ->
+        _ = Logger.error("ScriptServer cancel_script, job #{job_id} not found")
+        {:reply, {:error, :not_found}, state}
+
+      {task_ref, info} ->
+        handle_yield_or_shutdown(task_ref, info, timeout, from, state)
     end
   end
 
@@ -319,6 +319,28 @@ defmodule LogWatcher.ScriptServer do
     _ = Logger.error("ScriptServer task #{task_id}, sending SIGINT to #{os_pid}")
     _ = System.cmd("kill", ["-s", "INT", to_string(os_pid)])
     :ok
+  end
+
+  @spec handle_yield_or_shutdown(reference(), TaskInfo.t(), integer(), GenServer.from(), state()) ::
+          {:reply, {:error, :shutting_down}, state()} | {:noreply, state()}
+  defp handle_yield_or_shutdown(_task_ref, %TaskInfo{yield_client: yield_client}, _timeout, _from, state)
+       when is_pid(yield_client) do
+    _ = Logger.error("ScriptServer :yield_or_shutdown already shutting down")
+    {:reply, {:error, :shutting_down}, state}
+  end
+
+  defp handle_yield_or_shutdown(task_ref, %TaskInfo{} = info, timeout, from, state) do
+    _ = Logger.info("ScriptServer :yield_or_shutdown")
+    _ = Process.send_after(self(), {:yield_timeout, task_ref}, timeout)
+
+    next_state =
+      put_in(
+        state.tasks[task_ref],
+        %TaskInfo{info | yield_client: from}
+      )
+
+    _ = Logger.info("next state is now #{inspect(next_state)}")
+    {:noreply, next_state}
   end
 
   @spec do_run_script(
