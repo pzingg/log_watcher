@@ -2,7 +2,7 @@ defmodule LogWatcher.MockTaskTest do
   use LogWatcher.DataCase, async: false
   use Oban.Testing, repo: LogWatcher.Repo
 
-  alias LogWatcher.{Tasks, TaskStarter}
+  alias LogWatcher.{ScriptServer, Tasks, TaskStarter}
   alias LogWatcher.Tasks.Session
 
   require Logger
@@ -15,14 +15,14 @@ defmodule LogWatcher.MockTaskTest do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       LogWatcher.mock_task_args(to_string(context.test), script_file: "mock_task.R")
 
-    Tasks.archive_session_tasks(session)
+    _ = Tasks.archive_session_tasks(session)
 
     %{failure: 0, success: 0} = Oban.drain_queue(queue: :tasks)
 
     {:ok, %Oban.Job{id: job_id, queue: "tasks", state: state}} =
       TaskStarter.insert_job(session, task_id, task_type, task_args)
 
-    Logger.error("inserted new job #{job_id}, state #{state}")
+    _ = Logger.error("inserted new job #{job_id}, state #{state}")
 
     match_args = %{
       session_id: session.session_id,
@@ -35,15 +35,15 @@ defmodule LogWatcher.MockTaskTest do
       task_args: task_args
     }
 
-    assert_enqueued(worker: LogWatcher.TaskStarter, args: match_args)
+    assert_enqueued(worker: TaskStarter, args: match_args)
 
     expiry = System.monotonic_time(:millisecond) + @oban_exec_timeout
     {:ok, info} = wait_for_job_state(job_id, :executing, expiry)
     assert Enum.member?(info.running, job_id)
 
     # TODO: Get task or os_pid and wait on it
-    Logger.error("letting script timeout...")
-    Process.sleep(@script_timeout)
+    _ = Logger.error("letting script timeout...")
+    _ = Process.sleep(@script_timeout)
   end
 
   @tag :start_oban
@@ -51,7 +51,7 @@ defmodule LogWatcher.MockTaskTest do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       LogWatcher.mock_task_args(to_string(context.test), script_file: "mock_task.R")
 
-    Tasks.archive_session_tasks(session)
+    _ = Tasks.archive_session_tasks(session)
 
     args = %{
       session_id: session.session_id,
@@ -74,28 +74,28 @@ defmodule LogWatcher.MockTaskTest do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       LogWatcher.mock_task_args(to_string(context.test), script_file: "mock_task.R")
 
-    Tasks.archive_session_tasks(session)
+    _ = Tasks.archive_session_tasks(session)
 
     {:ok, %Oban.Job{id: job_id, queue: "tasks", state: state}} =
       TaskStarter.insert_job(session, task_id, task_type, task_args)
 
-    Logger.error("inserted new job #{job_id}, state #{state}")
+    _ = Logger.error("inserted new job #{job_id}, state #{state}")
 
     expiry = System.monotonic_time(:millisecond) + @oban_exec_timeout
     {:ok, info} = wait_for_job_state(job_id, :executing, expiry)
     assert Enum.member?(info.running, job_id)
 
-    Process.sleep(1_000)
-    Logger.error("canceling job...")
+    _ = Process.sleep(1_000)
+    _ = Logger.error("canceling job...")
     :ok = Oban.cancel_job(job_id)
-    LogWatcher.ScriptServer.cancel_script(job_id)
+    _ = ScriptServer.cancel_script(job_id)
 
     {:ok, info} = wait_for_job_state(job_id, :cancelled, expiry)
     # assert Enum.empty?(info.running)
 
     # TODO: Get task or os_pid and wait on it
-    Logger.error("letting script timeout...")
-    Process.sleep(@script_timeout)
+    _ = Logger.error("letting script timeout...")
+    _ = Process.sleep(@script_timeout)
   end
 
   @spec wait_for_job_state(String.t(), atom(), integer()) ::
@@ -113,11 +113,11 @@ defmodule LogWatcher.MockTaskTest do
       if time_now <= expiry do
         case state do
           :available ->
-            Process.sleep(1_000)
+            _ = Process.sleep(1_000)
             wait_for_job_state(job_id, wait_for_state, expiry)
 
           :scheduled ->
-            Process.sleep(1_000)
+            _ = Process.sleep(1_000)
             wait_for_job_state(job_id, wait_for_state, expiry)
 
           _ ->

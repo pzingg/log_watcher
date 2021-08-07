@@ -53,6 +53,7 @@ defmodule LogWatcher.Tasks.Task do
     field(:errors, [term()], default: [])
   end
 
+  @spec new() :: t()
   def new() do
     nil_values =
       @enforce_keys
@@ -61,6 +62,7 @@ defmodule LogWatcher.Tasks.Task do
     Kernel.struct(__MODULE__, nil_values)
   end
 
+  @spec required_fields([atom()]) :: [atom()]
   def required_fields(fields \\ [])
   def required_fields([]), do: @enforce_keys
 
@@ -68,8 +70,10 @@ defmodule LogWatcher.Tasks.Task do
     @enforce_keys -- @enforce_keys -- fields
   end
 
+  @spec all_fields() :: [atom()]
   def all_fields(), do: Keyword.keys(@changeset_fields)
 
+  @spec changeset_types() :: [{atom(), atom()}]
   def changeset_types(), do: @changeset_fields
 
   # See https://medium.com/very-big-things/towards-maintainable-elixir-the-core-and-the-interface-c267f0da43

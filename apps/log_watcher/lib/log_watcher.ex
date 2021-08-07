@@ -5,6 +5,8 @@ defmodule LogWatcher do
 
   Contexts are also responsible for managing your data, regardless
   if it comes from the database, an external API or others.
+
+  Collection of utilities in this module.
   """
 
   alias LogWatcher.{Tasks, TaskStarter}
@@ -12,6 +14,9 @@ defmodule LogWatcher do
 
   ## General utilities
 
+  @doc """
+  Format current UTC time as ISO8601 string with millisecond precision.
+  """
   @spec format_utcnow() :: String.t()
   def format_utcnow() do
     NaiveDateTime.utc_now()
@@ -32,10 +37,15 @@ defmodule LogWatcher do
 
   @type normalized_result() :: {:ok, struct()} | {:error, Ecto.Changeset.t()}
 
+  @doc """
+  After applying an action to a Changeset, parse the result if it is
+  an `{:error, changeset}` tuple, and raise an InputError with a message
+  that concatenates all the changeset errors.
+  """
   @spec maybe_raise_input_error(normalized_result(), String.t(), atom()) :: struct()
   def maybe_raise_input_error({:error, changeset}, label, id_field) do
     id_value = Ecto.Changeset.get_field(changeset, id_field)
-    errors = input_error_messages(changeset) |> Enum.join(" ")
+    errors = Translations.changeset_error_messages(changeset) |> Enum.join(" ")
 
     message =
       if !is_nil(id_value) do
@@ -50,29 +60,27 @@ defmodule LogWatcher do
 
   def maybe_raise_input_error({:ok, data}, _label, _id_field), do: data
 
-  @spec input_error_messages(Ecto.Changeset.t()) :: [String.t()]
-  def input_error_messages(changeset) do
-    Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
-      Enum.reduce(opts, msg, fn {key, value}, acc ->
-        String.replace(acc, "%{#{key}}", to_string(value))
-      end)
-    end)
-    |> Enum.map(fn {field, errors} ->
-      Enum.map(errors, fn error ->
-        humanize(field) <> " " <> error <> "."
-      end)
+  @doc """
+  Interpolate the bindings (e.g. `%{count}`) of a Changeset error into
+  an error message.
+  """
+  @spec translate_error_without_gettext({String.t(), Keyword.t()}) :: String.t()
+  def translate_error_without_gettext({msg, opts}) do
+    Enum.reduce(opts, msg, fn {key, value}, acc ->
+      String.replace(acc, "%{#{key}}", to_string(value))
     end)
   end
 
   @doc """
-  Copied from Phoenix.HTML module.
+  Copied from Phoenix.HTML module. Upcase a field name (either an
+  atom or a string), changing underscores to spaces and removing
+  any "_id" suffix.
   """
-  # TODO: Use Gettext to rewrite field names?
-  # Will require access to Gettext modules in each application?
-  @spec humanize(atom() | binary()) :: String.t()
-  def humanize(atom) when is_atom(atom), do: humanize(Atom.to_string(atom))
+  @spec humanize_field_without_gettext(atom() | binary()) :: String.t()
+  def humanize_field_without_gettext(atom) when is_atom(atom),
+    do: humanize_field_without_gettext(Atom.to_string(atom))
 
-  def humanize(bin) when is_binary(bin) do
+  def humanize_field_without_gettext(bin) when is_binary(bin) do
     bin =
       if String.ends_with?(bin, "_id") do
         binary_part(bin, 0, byte_size(bin) - 3)
@@ -84,64 +92,28 @@ defmodule LogWatcher do
   end
 
   @doc """
-  Parse Absinthe-like schema definition for schemaless changesets.
-  The schema is a map of `{field, type}` items,
-  The `type` can be any Ecto field type, or can be a list, where
-  the first element is the Ecto field type, and the remaining elements
-  are keyword options. The only recognized option is `:required`.
-
-  Returns a 3-tuple, with these elements:
-    * the cleaned `{field, type}` map
-    * a list of all the field names (atoms)
-    * a list of only the field names with the `:required` option
+  Create a random LogWatcher session and task, and run the task.
+  Useful for observing the supervision tree (Hint: use `num_lines: 200`
+  to generate a longer running task).
   """
-  @spec parse_input_types(map()) :: {map(), [atom()], [atom()]}
-  def parse_input_types(input_schema) do
-    parsed =
-      Enum.map(input_schema, fn
-        {k, nil} ->
-          raise "invalid schema at #{k}"
-
-        {k, v} when is_atom(v) or is_tuple(v) ->
-          [{k, v}, k, nil]
-
-        {k, v} when is_list(v) ->
-          [type | opts] = v
-
-          if is_atom(type) or is_tuple(type) do
-            if Keyword.get(opts, :required, false) do
-              [{k, type}, k, k]
-            else
-              [{k, type}, k, nil]
-            end
-          else
-            raise "invalid schema at #{k}"
-          end
-      end)
-      |> List.zip()
-
-    [types, permitted_fields, required_fields] = parsed
-
-    {
-      Tuple.to_list(types) |> Map.new(),
-      Tuple.to_list(permitted_fields),
-      Tuple.to_list(required_fields) |> Enum.filter(fn k -> !is_nil(k) end)
-    }
-  end
-
   @spec run_mock_task(String.t(), Keyword.t()) :: {:ok, term()} | {:discard, term()}
   def run_mock_task(description, opts \\ []) do
     %{session: session, task_id: task_id, task_type: task_type, task_args: mock_task_args} =
       mock_task_args(description, script_file: "mock_task.R")
 
     task_args =
-      Enum.reduce(opts, mock_task_args, fn {key, value}, acc -> Map.put(acc, to_string(key), value) end)
+      Enum.reduce(opts, mock_task_args, fn {key, value}, acc ->
+        Map.put(acc, to_string(key), value)
+      end)
 
-    Tasks.archive_session_tasks(session)
+    _ = Tasks.archive_session_tasks(session)
 
     TaskStarter.watch_and_run(session, task_id, task_type, task_args)
   end
 
+  @doc """
+  Create random arguments for a session and task.
+  """
   @spec mock_task_args(String.t(), Keyword.t()) :: map()
   def mock_task_args(description, opts) do
     session_id = Faker.Util.format("S%4d")

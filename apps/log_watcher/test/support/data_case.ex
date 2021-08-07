@@ -89,15 +89,15 @@ defmodule LogWatcher.DataCase do
 
   @spec wait_on_script_task(reference(), integer()) :: {:ok, term()} | {:error, :timeout}
   def wait_on_script_task(task_ref, timeout) when is_reference(task_ref) do
-    Logger.error("wait_on_script_task #{inspect(task_ref)}")
+    _ = Logger.error("wait_on_script_task #{inspect(task_ref)}")
     result = LogWatcher.ScriptServer.yield_or_shutdown_task(task_ref, timeout)
-    Logger.error("wait_on_script_task returned #{inspect(result)}")
+    _ = Logger.error("wait_on_script_task returned #{inspect(result)}")
     result
   end
 
   @spec wait_on_os_process(integer(), integer()) :: :ok | {:error, :timeout}
   def wait_on_os_process(os_pid, timeout) do
-    Logger.error("wait_on_os_process #{os_pid}")
+    _ = Logger.error("wait_on_os_process #{os_pid}")
     proc_file = "/proc/#{os_pid}"
 
     if File.exists?(proc_file) do
@@ -111,7 +111,7 @@ defmodule LogWatcher.DataCase do
   @spec wait_on_proc_file_until(String.t(), integer()) :: :ok | {:error, :timeout}
   def wait_on_proc_file_until(proc_file, expiry) do
     time_now = System.monotonic_time()
-    Process.sleep(1)
+    _ = Process.sleep(1)
 
     if File.exists?(proc_file) do
       if time_now <= expiry do

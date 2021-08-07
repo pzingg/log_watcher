@@ -25,6 +25,7 @@ defmodule LogWatcher.Tasks.Session do
     field(:gen, integer(), default: -1)
   end
 
+  @spec new() :: t()
   def new() do
     nil_values =
       @enforce_keys
@@ -33,6 +34,7 @@ defmodule LogWatcher.Tasks.Session do
     Kernel.struct(__MODULE__, nil_values)
   end
 
+  @spec required_fields([atom()]) :: [atom()]
   def required_fields(fields \\ [])
   def required_fields([]), do: @enforce_keys
 
@@ -40,8 +42,10 @@ defmodule LogWatcher.Tasks.Session do
     @enforce_keys -- @enforce_keys -- fields
   end
 
+  @spec all_fields() :: [atom()]
   def all_fields(), do: Keyword.keys(@changeset_fields)
 
+  @spec changeset_types() :: [{atom(), atom()}]
   def changeset_types(), do: @changeset_fields
 
   @spec log_file_name(String.t() | t()) :: String.t()
@@ -65,13 +69,13 @@ defmodule LogWatcher.Tasks.Session do
 
   @spec subscribe(String.t()) :: :ok | {:error, term()}
   def subscribe(topic) do
-    Logger.info("#{inspect(self())} subscribing to #{topic}")
+    _ = Logger.info("#{inspect(self())} subscribing to #{topic}")
     Phoenix.PubSub.subscribe(LogWatcher.PubSub, topic)
   end
 
   @spec broadcast(String.t(), term()) :: :ok | {:error, term()}
   def broadcast(topic, message) when is_tuple(message) do
-    Logger.info("#{inspect(self())} broadcasting :#{Kernel.elem(message, 0)} to #{topic}")
+    _ = Logger.info("#{inspect(self())} broadcasting :#{Kernel.elem(message, 0)} to #{topic}")
     Phoenix.PubSub.broadcast(LogWatcher.PubSub, topic, message)
   end
 

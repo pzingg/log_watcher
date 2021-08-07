@@ -11,7 +11,7 @@ defmodule LogWatcher.MockTaskTest do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       LogWatcher.mock_task_args(to_string(context.test), script_file: "mock_task.py")
 
-    Tasks.archive_session_tasks(session)
+    _ = Tasks.archive_session_tasks(session)
 
     start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
     task_ref = assert_script_started(start_result, task_id)
@@ -22,7 +22,7 @@ defmodule LogWatcher.MockTaskTest do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       LogWatcher.mock_task_args(to_string(context.test), script_file: "mock_task.R")
 
-    Tasks.archive_session_tasks(session)
+    _ = Tasks.archive_session_tasks(session)
 
     start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
     task_ref = assert_script_started(start_result, task_id)
@@ -36,7 +36,7 @@ defmodule LogWatcher.MockTaskTest do
         error: "initializing"
       )
 
-    Tasks.archive_session_tasks(session)
+    _ = Tasks.archive_session_tasks(session)
 
     start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
     task_ref = assert_script_errors(start_result, task_id, "initializing")
@@ -50,7 +50,7 @@ defmodule LogWatcher.MockTaskTest do
         error: "reading"
       )
 
-    Tasks.archive_session_tasks(session)
+    _ = Tasks.archive_session_tasks(session)
 
     start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
     task_ref = assert_script_errors(start_result, task_id, "reading")
@@ -64,7 +64,7 @@ defmodule LogWatcher.MockTaskTest do
         error: "started"
       )
 
-    Tasks.archive_session_tasks(session)
+    _ = Tasks.archive_session_tasks(session)
 
     start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
     task_ref = assert_script_errors(start_result, task_id, "started")
@@ -78,7 +78,7 @@ defmodule LogWatcher.MockTaskTest do
         error: "validating"
       )
 
-    Tasks.archive_session_tasks(session)
+    _ = Tasks.archive_session_tasks(session)
 
     start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
     task_ref = assert_script_errors(start_result, task_id, "validating")
@@ -92,7 +92,7 @@ defmodule LogWatcher.MockTaskTest do
         error: "running"
       )
 
-    Tasks.archive_session_tasks(session)
+    _ = Tasks.archive_session_tasks(session)
 
     start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
     task_ref = assert_script_started(start_result, task_id)
@@ -106,7 +106,7 @@ defmodule LogWatcher.MockTaskTest do
         cancel: "created"
       )
 
-    Tasks.archive_session_tasks(session)
+    _ = Tasks.archive_session_tasks(session)
 
     start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
     # Although the last status we read was "created", by the time the script
@@ -119,7 +119,7 @@ defmodule LogWatcher.MockTaskTest do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       LogWatcher.mock_task_args(to_string(context.test), script_file: "mock_task.R")
 
-    Tasks.archive_session_tasks(session)
+    _ = Tasks.archive_session_tasks(session)
 
     {:ok, %{task_ref: task_ref}} =
       TaskStarter.watch_and_run(session, task_id, task_type, task_args)
@@ -132,7 +132,7 @@ defmodule LogWatcher.MockTaskTest do
     assert found_task.gen == session.gen
     assert found_task.status == "running"
 
-    wait_on_script_task(task_ref, @script_timeout)
+    _ = wait_on_script_task(task_ref, @script_timeout)
 
     task_list = Tasks.list_tasks(session)
     assert Enum.count(task_list) == 1

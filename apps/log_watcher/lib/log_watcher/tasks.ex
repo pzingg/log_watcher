@@ -74,7 +74,7 @@ defmodule LogWatcher.Tasks do
       "gen" => gen
     }
     |> normalize_session_create_input()
-    |> Ecto.Changeset.apply_action(:input)
+    |> Ecto.Changeset.apply_action(:insert)
     |> maybe_init_session_log()
   end
 
