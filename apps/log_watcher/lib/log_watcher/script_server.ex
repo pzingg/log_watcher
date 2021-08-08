@@ -39,11 +39,7 @@ defmodule LogWatcher.ScriptServer do
           }
   end
 
-  defstruct tasks: %{}
-
-  @type state() :: %__MODULE__{
-          tasks: %{required(reference()) => TaskInfo.t()}
-        }
+  @type state() :: %{required(reference()) => TaskInfo.t()}
 
   @info_keys [
     :session_id,
@@ -107,7 +103,7 @@ defmodule LogWatcher.ScriptServer do
   @spec init(term()) :: {:ok, state()}
   def init(_arg) do
     _ = Process.flag(:trap_exit, true)
-    {:ok, %__MODULE__{}}
+    {:ok, %{}}
   end
 
   @doc false
@@ -124,7 +120,7 @@ defmodule LogWatcher.ScriptServer do
 
     # After we start the task, we store its reference and the url it is fetching
     next_state =
-      put_in(state.tasks[task.ref], %TaskInfo{
+      Map.put(state, task.ref, %TaskInfo{
         task: task,
         task_id: Map.get(start_args, :task_id),
         job_id: Map.get(start_args, :oban_job_id)
@@ -134,24 +130,17 @@ defmodule LogWatcher.ScriptServer do
   end
 
   def handle_call({:update_os_pid, task_ref, os_pid}, _from, state) do
-    case Map.get(state.tasks, task_ref) do
+    case Map.get(state, task_ref) do
       %TaskInfo{task_id: task_id, sigint_pending: true} = info ->
         _ = Logger.error("ScriptServer update_os_pid, sending pending SIGINT to #{os_pid}")
 
         next_state =
-          put_in(
-            state.tasks[task_ref],
-            %TaskInfo{info | os_pid: os_pid, sigint_pending: false}
-          )
+          Map.put(state, task_ref, %TaskInfo{info | os_pid: os_pid, sigint_pending: false})
 
         {:reply, send_sigint(task_id, os_pid), next_state}
 
       %TaskInfo{} = info ->
-        next_state =
-          put_in(
-            state.tasks[task_ref],
-            %TaskInfo{info | os_pid: os_pid}
-          )
+        next_state = Map.put(state, task_ref, %TaskInfo{info | os_pid: os_pid})
 
         {:reply, :ok, next_state}
 
@@ -161,7 +150,7 @@ defmodule LogWatcher.ScriptServer do
   end
 
   def handle_call({:cancel_script, task_ref}, _from, state) when is_reference(task_ref) do
-    case Map.get(state.tasks, task_ref) do
+    case Map.get(state, task_ref) do
       nil ->
         _ = Logger.error("ScriptServer cancel_script, task_ref #{inspect(task_ref)} not found")
         {:reply, {:error, :not_found}, state}
@@ -184,7 +173,7 @@ defmodule LogWatcher.ScriptServer do
 
   def handle_call({:yield_or_shutdown, task_ref, timeout}, from, state)
       when is_reference(task_ref) do
-    case Map.get(state.tasks, task_ref) do
+    case Map.get(state, task_ref) do
       nil ->
         _ =
           Logger.error("ScriptServer :yield_or_shutdown task_ref #{inspect(task_ref)} not found")
@@ -211,7 +200,7 @@ defmodule LogWatcher.ScriptServer do
   @impl true
   @spec handle_info(term(), state()) :: {:noreply, state()}
   def handle_info({:yield_timeout, task_ref}, state) do
-    case Map.get(state.tasks, task_ref) do
+    case Map.get(state, task_ref) do
       %TaskInfo{task_id: task_id, yield_client: nil} ->
         _ = Logger.error("ScriptServer :yield_timeout for task #{task_id}, no client")
         {:noreply, state}
@@ -220,15 +209,14 @@ defmodule LogWatcher.ScriptServer do
         _ = Logger.error("ScriptServer :yield_timeout for task #{task_id}")
         GenServer.reply(yield_client, {:error, :timeout})
 
-        _ = Process.exit(task.pid, :shutdown)
+        if Process.alive?(task.pid) do
+          _ = Logger.error("ScriptServer shutting down #{inspect(task.pid)}")
+          _ = Process.exit(task.pid, :shutdown)
+        else
+          _ = Logger.error("ScriptServer #{inspect(task.pid)} already dead")
+        end
 
-        next_state =
-          put_in(
-            state.tasks[task_ref],
-            %TaskInfo{info | yield_client: nil}
-          )
-
-        {:noreply, next_state}
+        demonitor_and_remove_task(task_ref, state)
 
       _ ->
         _ = Logger.error("ScriptServer :yield_timeout #{inspect(task_ref)} already removed")
@@ -237,7 +225,7 @@ defmodule LogWatcher.ScriptServer do
   end
 
   def handle_info({task_ref, result}, state) do
-    case Map.get(state.tasks, task_ref) do
+    case Map.get(state, task_ref) do
       nil ->
         _ = Logger.error("ScriptServer ref #{inspect(task_ref)} already removed")
         {:noreply, state}
@@ -245,30 +233,27 @@ defmodule LogWatcher.ScriptServer do
       %TaskInfo{task_id: task_id, yield_client: yield_client} ->
         _ = Logger.error("ScriptServer ref for task #{task_id} got #{inspect(result)}")
 
-        # The task succeeded so we can cancel the monitoring and discard the DOWN message
-        _ = Process.demonitor(task_ref, [:flush])
-
         if !is_nil(yield_client) do
           _ = Logger.error("ScriptServer ref replying with result")
           _ = GenServer.reply(yield_client, result)
         end
 
-        next_state = %__MODULE__{state | tasks: Map.delete(state.tasks, task_ref)}
-        {:noreply, next_state}
+        # The task succeeded so we can cancel the monitoring and discard the DOWN message
+        demonitor_and_remove_task(task_ref, state)
     end
   end
 
   def handle_info({:DOWN, task_ref, _, _, reason}, state) do
     # What does :noconnection reason mean? See Task.yield implementation.
-    case Map.get(state.tasks, task_ref) do
+    case Map.get(state, task_ref) do
       nil ->
         _ = Logger.error("ScriptServer :DOWN task_ref #{inspect(task_ref)} already removed")
         {:noreply, state}
 
       %TaskInfo{task_id: task_id} ->
         _ = Logger.error("ScriptServer task #{task_id} failed with reason #{inspect(reason)}")
-        next_state = %__MODULE__{state | tasks: Map.delete(state.tasks, task_ref)}
-        {:noreply, next_state}
+
+        demonitor_and_remove_task(task_ref, state)
     end
   end
 
@@ -277,9 +262,17 @@ defmodule LogWatcher.ScriptServer do
     {:noreply, state}
   end
 
+  @spec demonitor_and_remove_task(reference(), state()) :: {:noreply, state()}
+  defp demonitor_and_remove_task(task_ref, state) do
+    _ = Process.demonitor(task_ref, [:flush])
+
+    next_state = Map.delete(state, task_ref)
+    {:noreply, next_state}
+  end
+
   @spec find_task_by_job_id(integer(), state()) :: {reference(), TaskInfo.t()} | nil
   defp find_task_by_job_id(job_id, state) do
-    Enum.find(state.tasks, fn
+    Enum.find(state, fn
       {_ref, %TaskInfo{job_id: ^job_id}} -> true
       _ -> false
     end)
@@ -291,22 +284,14 @@ defmodule LogWatcher.ScriptServer do
       0 ->
         _ = Logger.error("ScriptServer cancel_script, no os_pid available")
 
-        next_state =
-          put_in(
-            state.tasks[task_ref],
-            %TaskInfo{info | sigint_pending: true}
-          )
+        next_state = Map.put(state, task_ref, %TaskInfo{info | sigint_pending: true})
 
         {:reply, :pending, next_state}
 
       _ ->
         _ = Logger.error("ScriptServer cancel_script, sending SIGINT to #{os_pid}")
 
-        next_state =
-          put_in(
-            state.tasks[task_ref],
-            %TaskInfo{info | sigint_pending: false}
-          )
+        next_state = Map.put(state, task_ref, %TaskInfo{info | sigint_pending: false})
 
         {:reply, send_sigint(task_id, os_pid), next_state}
     end
@@ -323,7 +308,13 @@ defmodule LogWatcher.ScriptServer do
 
   @spec handle_yield_or_shutdown(reference(), TaskInfo.t(), integer(), GenServer.from(), state()) ::
           {:reply, {:error, :shutting_down}, state()} | {:noreply, state()}
-  defp handle_yield_or_shutdown(_task_ref, %TaskInfo{yield_client: yield_client}, _timeout, _from, state)
+  defp handle_yield_or_shutdown(
+         _task_ref,
+         %TaskInfo{yield_client: yield_client},
+         _timeout,
+         _from,
+         state
+       )
        when is_pid(yield_client) do
     _ = Logger.error("ScriptServer :yield_or_shutdown already shutting down")
     {:reply, {:error, :shutting_down}, state}
@@ -333,11 +324,7 @@ defmodule LogWatcher.ScriptServer do
     _ = Logger.info("ScriptServer :yield_or_shutdown")
     _ = Process.send_after(self(), {:yield_timeout, task_ref}, timeout)
 
-    next_state =
-      put_in(
-        state.tasks[task_ref],
-        %TaskInfo{info | yield_client: from}
-      )
+    next_state = Map.put(state, task_ref, %TaskInfo{info | yield_client: from})
 
     _ = Logger.info("next state is now #{inspect(next_state)}")
     {:noreply, next_state}
