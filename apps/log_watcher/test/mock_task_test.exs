@@ -2,7 +2,7 @@ defmodule LogWatcher.MockTaskTest do
   use LogWatcher.DataCase, async: false
   use Oban.Testing, repo: LogWatcher.Repo
 
-  alias LogWatcher.{Tasks, TaskStarter}
+  alias LogWatcher.{ScriptServer, Tasks, TaskStarter}
   alias LogWatcher.Tasks.Session
 
   @script_timeout 30_000
@@ -99,34 +99,7 @@ defmodule LogWatcher.MockTaskTest do
     {:ok, _} = wait_on_script_task(task_ref, @script_timeout)
   end
 
-  test "08 times out an Rscript mock task", context do
-    %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
-      LogWatcher.mock_task_args(to_string(context.test), script_file: "mock_task.R")
-
-    _ = Tasks.archive_session_tasks(session)
-
-    start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
-    task_ref = assert_script_started(start_result, task_id)
-    {:error, :timeout} = wait_on_script_task(task_ref, 500)
-  end
-
-  test "09 sends SIGINT to cancel a mock task", context do
-    %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
-      LogWatcher.mock_task_args(to_string(context.test),
-        script_file: "mock_task.R",
-        cancel: "created"
-      )
-
-    _ = Tasks.archive_session_tasks(session)
-
-    start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
-    # Although the last status we read was "created", by the time the script
-    # is interrupted, it's in the "reading" phase.
-    task_ref = assert_script_errors(start_result, task_id, "reading", "cancelled")
-    {:ok, _} = wait_on_script_task(task_ref, @script_timeout)
-  end
-
-  test "10 finds the running task", context do
+  test "08 finds the running task", context do
     %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
       LogWatcher.mock_task_args(to_string(context.test), script_file: "mock_task.R")
 
@@ -154,5 +127,43 @@ defmodule LogWatcher.MockTaskTest do
 
     task_list = Tasks.list_tasks(session)
     assert Enum.empty?(task_list)
+  end
+
+  test "09 times out on a running task", context do
+    %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
+      LogWatcher.mock_task_args(to_string(context.test), script_file: "mock_task.R")
+
+    _ = Tasks.archive_session_tasks(session)
+
+    start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
+    task_ref = assert_script_started(start_result, task_id)
+    {:error, :timeout} = wait_on_script_task(task_ref, 500)
+  end
+
+  test "10 cancels a mock task", context do
+    %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
+      LogWatcher.mock_task_args(to_string(context.test),
+        script_file: "mock_task.R",
+        cancel: "created"
+      )
+
+    _ = Tasks.archive_session_tasks(session)
+
+    start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
+    # Although the last status we read was "created", by the time the script
+    # is interrupted, it's in the "reading" phase.
+    task_ref = assert_script_errors(start_result, task_id, "reading", "cancelled")
+    {:ok, _} = wait_on_script_task(task_ref, @script_timeout)
+  end
+
+  test "11 shuts down a mock task", context do
+    %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
+      LogWatcher.mock_task_args(to_string(context.test), script_file: "mock_task.R")
+
+    _ = Tasks.archive_session_tasks(session)
+
+    start_result = TaskStarter.watch_and_run(session, task_id, task_type, task_args)
+    task_ref = assert_script_started(start_result, task_id)
+    :ok = ScriptServer.shutdown_task(task_ref)
   end
 end

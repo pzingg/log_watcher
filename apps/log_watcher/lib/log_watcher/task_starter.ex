@@ -300,7 +300,6 @@ defmodule LogWatcher.TaskStarter do
     os_pid = Map.get(update_info, :os_pid, 0)
 
     if os_pid != 0 && !sent_os_pid do
-      _ = Logger.error("task #{task_id}: got os_pid #{os_pid}")
       _ = ScriptServer.update_os_pid(task_ref, os_pid)
       %LoopInfo{info | sent_os_pid: true}
     else
