@@ -18,6 +18,8 @@ defmodule LogWatcher.DataCase do
 
   require Logger
 
+  alias LogWatcher.ScriptServer
+
   using do
     quote do
       alias LogWatcher.Repo
@@ -87,25 +89,25 @@ defmodule LogWatcher.DataCase do
     task_ref
   end
 
-  @spec wait_on_script_task(reference() | integer(), integer()) ::
+  @spec await_task(reference() | integer(), integer()) ::
           {:ok, term()} | {:error, :timeout}
-  def wait_on_script_task(task_ref, timeout) when is_reference(task_ref) do
-    _ = Logger.error("wait_on_script_task task_ref #{inspect(task_ref)}")
-    result = LogWatcher.ScriptServer.yield_or_shutdown_task(task_ref, timeout)
-    _ = Logger.error("wait_on_script_task returned #{inspect(result)}")
+  def await_task(task_ref, timeout) when is_reference(task_ref) do
+    _ = Logger.error("await_task task_ref #{inspect(task_ref)}")
+    result = ScriptServer.await(task_ref, timeout)
+    _ = Logger.error("await_task returned #{inspect(result)}")
     result
   end
 
-  def wait_on_script_task(job_id, timeout) when is_integer(job_id) do
-    _ = Logger.error("wait_on_script_task job #{job_id}")
-    result = LogWatcher.ScriptServer.yield_or_shutdown_task(job_id, timeout)
-    _ = Logger.error("wait_on_script_task returned #{inspect(result)}")
+  def await_task(job_id, timeout) when is_integer(job_id) do
+    _ = Logger.error("await_task job #{job_id}")
+    result = ScriptServer.await(job_id, timeout)
+    _ = Logger.error("await_task returned #{inspect(result)}")
     result
   end
 
-  @spec wait_on_os_process(integer(), integer()) :: :ok | {:error, :timeout}
-  def wait_on_os_process(os_pid, timeout) do
-    _ = Logger.error("wait_on_os_process #{os_pid}")
+  @spec await_os_process(integer(), integer()) :: :ok | {:error, :timeout}
+  def await_os_process(os_pid, timeout) do
+    _ = Logger.error("await_os_process #{os_pid}")
     proc_file = "/proc/#{os_pid}"
 
     if File.exists?(proc_file) do

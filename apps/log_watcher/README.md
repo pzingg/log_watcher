@@ -148,7 +148,7 @@ run.
 Note: Oban will send an exit signal to a running worker when
 a job is canceled, but only if PostgreSQL notifications are 
 active. In the test environment, we must manually send a 
-`cancel_script` command to the `LogWatcher.ScriptServer`.
+`cancel` command to the `LogWatcher.ScriptServer`.
 
 
 ## Oban compatibility

@@ -41,6 +41,10 @@ defmodule LogWatcher.TaskStarter do
           }
   end
 
+  defdelegate cancel(task_ref_or_job_id), to: ScriptServer
+  defdelegate kill(task_ref_or_job_id), to: ScriptServer
+  defdelegate await(task_ref_or_job_id, timeout), to: ScriptServer
+
   @doc """
   Insert an Oban.Job for this worker.
   """
@@ -259,14 +263,14 @@ defmodule LogWatcher.TaskStarter do
         next_info =
           info
           |> maybe_update_os_pid(update_info)
-          |> maybe_cancel_script(update_info)
+          |> maybe_cancel(update_info)
 
         _ = Logger.info("task #{task_id}: re-entering loop")
         loop(next_info)
 
       {:EXIT, pid, reason} ->
         _ = Logger.error("task #{task_id}, loop received :EXIT #{reason}")
-        _ = ScriptServer.cancel_script(task_ref)
+        _ = ScriptServer.cancel(task_ref)
         {:error, {:EXIT, pid, reason}}
 
       other ->
@@ -294,7 +298,7 @@ defmodule LogWatcher.TaskStarter do
 
   @spec maybe_update_os_pid(LoopInfo.t(), map()) :: LoopInfo.t()
   defp maybe_update_os_pid(
-         %LoopInfo{task_id: task_id, task_ref: task_ref, sent_os_pid: sent_os_pid} = info,
+         %LoopInfo{task_ref: task_ref, sent_os_pid: sent_os_pid} = info,
          update_info
        ) do
     os_pid = Map.get(update_info, :os_pid, 0)
@@ -307,14 +311,14 @@ defmodule LogWatcher.TaskStarter do
     end
   end
 
-  @spec maybe_cancel_script(LoopInfo.t(), map()) :: LoopInfo.t()
-  defp maybe_cancel_script(
+  @spec maybe_cancel(LoopInfo.t(), map()) :: LoopInfo.t()
+  defp maybe_cancel(
          %LoopInfo{task_id: task_id, task_ref: task_ref, cancel: cancel} = info,
          %{status: status}
        ) do
     if status == cancel do
       _ = Logger.error("task #{task_id}: cancelling script, last status read was #{status}")
-      _ = ScriptServer.cancel_script(task_ref)
+      _ = ScriptServer.cancel(task_ref)
       %LoopInfo{info | cancel: "sent"}
     else
       info
