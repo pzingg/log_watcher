@@ -41,9 +41,9 @@ defmodule LogWatcher.TaskStarter do
           }
   end
 
-  defdelegate cancel(task_ref_or_job_id), to: ScriptServer
-  defdelegate kill(task_ref_or_job_id), to: ScriptServer
-  defdelegate await(task_ref_or_job_id, timeout), to: ScriptServer
+  defdelegate cancel(key), to: ScriptServer
+  defdelegate kill(key), to: ScriptServer
+  defdelegate await(key, timeout), to: ScriptServer
 
   @doc """
   Insert an Oban.Job for this worker.

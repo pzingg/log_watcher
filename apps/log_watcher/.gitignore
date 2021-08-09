@@ -21,3 +21,6 @@ erl_crash.dump
 
 # Ignore package tarball (built via "mix hex.build").
 log_watcher-*.tar
+
+# Tests put output here
+/priv/mock_task/output/*.json*

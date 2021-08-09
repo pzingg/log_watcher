@@ -41,6 +41,8 @@ defmodule LogWatcher.ScriptServer do
 
   @type state() :: %{required(reference()) => TaskInfo.t()}
 
+  @type task_key() :: reference() | integer() | String.t()
+
   @info_keys [
     :session_id,
     :session_log_path,
@@ -59,7 +61,7 @@ defmodule LogWatcher.ScriptServer do
   @doc """
   Public interface. Launch and monitor a shell script.
   """
-  @spec run_script(String.t(), map()) :: reference()
+  @spec run_script(String.t(), %{required(:task_id) => String.t()}) :: reference()
   def run_script(script_path, start_args) do
     GenServer.call(__MODULE__, {:run_script, script_path, start_args})
   end
@@ -68,33 +70,42 @@ defmodule LogWatcher.ScriptServer do
   Public interface. Cancel a task by sending a SIGINT signal to the
   task's POSIX process. If the POSIX process id has not been read yet,
   the signal will be sent as soon as the process id is set.
+
+  The `key` argument may be either a reference to the Elixir Task, an
+  Oban job ID (integer), or a task ID (string).
   """
-  @spec cancel(reference() | integer()) :: :ok | {:error, :not_found}
-  def cancel(task_ref_or_job_id) do
-    GenServer.call(__MODULE__, {:cancel, task_ref_or_job_id})
+  @spec cancel(task_key()) :: :ok | {:error, :not_found}
+  def cancel(key) do
+    GenServer.call(__MODULE__, {:cancel, key})
   end
 
   @doc """
   Public interface. Shutdown the task.
+
+  The `key` argument may be either a reference to the Elixir Task, an
+  Oban job ID (integer), or a task ID (string).
   """
-  @spec kill(reference() | integer()) :: :ok | {:error, :not_found}
-  def kill(task_ref_or_job_id) do
-    GenServer.call(__MODULE__, {:kill, task_ref_or_job_id})
+  @spec kill(task_key()) :: :ok | {:error, :not_found}
+  def kill(key) do
+    GenServer.call(__MODULE__, {:kill, key})
   end
 
   @doc """
   Public interface. Wait for the Elixir Task to complete. Note
   that the POSIX process may still be running after the Task completes.
+
+  The `key` argument may be either a reference to the Elixir Task, an
+  Oban job ID (integer), or a task ID (string).
   """
-  @spec await(reference() | integer(), integer()) ::
+  @spec await(task_key(), integer()) ::
           {:ok, term()} | {:error, :not_found | :timeout | :shutdown_requested}
-  def await(task_ref_or_job_id, timeout) do
+  def await(key, timeout) do
     # Prevent this by specifying (timeout + 100) in the GenServer.call:
     # ** (exit) exited in: GenServer.call(LogWatcher.ScriptServer, {:await, #Reference<0.461027745.1939865606.72509>, 10000}, 5000)
     #      ** (EXIT) time out
     GenServer.call(
       __MODULE__,
-      {:await, task_ref_or_job_id, timeout},
+      {:await, key, timeout},
       timeout + 100
     )
   end
@@ -121,7 +132,7 @@ defmodule LogWatcher.ScriptServer do
   @impl true
   @spec handle_call(term(), GenServer.from(), state()) ::
           {:reply, term(), state()} | {:noreply, state()}
-  def handle_call({:run_script, script_path, start_args}, _from, state) do
+  def handle_call({:run_script, script_path, %{task_id: task_id} = start_args}, _from, state) do
     _ = Logger.info("ScriptServer run_script #{script_path}")
 
     task =
@@ -133,58 +144,26 @@ defmodule LogWatcher.ScriptServer do
     next_state =
       Map.put(state, task.ref, %TaskInfo{
         task: task,
-        task_id: Map.get(start_args, :task_id),
+        task_id: task_id,
         job_id: Map.get(start_args, :oban_job_id)
       })
 
     {:reply, task.ref, next_state}
   end
 
-  def handle_call({:cancel, task_ref}, _from, state) when is_reference(task_ref) do
-    case Map.get(state, task_ref) do
-      %TaskInfo{} = info ->
-        send_sigint_or_set_pending(task_ref, info, state)
-
-      _nil ->
-        _ = Logger.error("ScriptServer cancel, task_ref #{inspect(task_ref)} not found")
-        {:reply, {:error, :not_found}, state}
-    end
-  end
-
-  def handle_call({:cancel, job_id}, _from, state) when is_integer(job_id) do
-    case find_task_by_job_id(job_id, state) do
+  def handle_call({:cancel, key}, _from, state) do
+    case find_task_by_key(key, state) do
       {task_ref, %TaskInfo{} = info} ->
         send_sigint_or_set_pending(task_ref, info, state)
 
       _nil ->
-        _ = Logger.error("ScriptServer cancel, job #{job_id} not found")
+        _ = Logger.error("ScriptServer cancel, key #{inspect(key)} not found")
         {:reply, {:error, :not_found}, state}
     end
   end
 
-  def handle_call({:kill, task_ref}, _from, state)
-      when is_reference(task_ref) do
-    case Map.get(state, task_ref) do
-      %TaskInfo{} = info ->
-        next_info =
-          maybe_send_reply(info, {:error, :shutdown_requested},
-            fail_silently: true,
-            log_message: "shutdown already requested"
-          )
-
-        {reply, next_state} = shutdown_and_remove_task(task_ref, next_info, state)
-        {:reply, reply, next_state}
-
-      _nil ->
-        _ = Logger.error("ScriptServer kill task_ref #{inspect(task_ref)} not found")
-
-        {:reply, {:error, :not_found}, state}
-    end
-  end
-
-  def handle_call({:kill, job_id}, _from, state)
-      when is_integer(job_id) do
-    case find_task_by_job_id(job_id, state) do
+  def handle_call({:kill, key}, _from, state) do
+    case find_task_by_key(key, state) do
       {task_ref, %TaskInfo{} = info} ->
         next_info =
           maybe_send_reply(info, {:error, :shutdown_requested},
@@ -196,32 +175,18 @@ defmodule LogWatcher.ScriptServer do
         {:reply, reply, next_state}
 
       _nil ->
-        _ = Logger.error("ScriptServer kill, job #{job_id} not found")
+        _ = Logger.error("ScriptServer kill, key #{inspect(key)} not found")
         {:reply, {:error, :not_found}, state}
     end
   end
 
-  def handle_call({:await, task_ref, timeout}, from, state)
-      when is_reference(task_ref) do
-    case Map.get(state, task_ref) do
-      %TaskInfo{} = info ->
-        set_awaiting_client(task_ref, info, timeout, from, state)
-
-      _nil ->
-        _ = Logger.error("ScriptServer await task_ref #{inspect(task_ref)} not found")
-
-        {:reply, {:error, :not_found}, state}
-    end
-  end
-
-  def handle_call({:await, job_id, timeout}, from, state)
-      when is_integer(job_id) do
-    case find_task_by_job_id(job_id, state) do
+  def handle_call({:await, key, timeout}, from, state) do
+    case find_task_by_key(key, state) do
       {task_ref, %TaskInfo{} = info} ->
         set_awaiting_client(task_ref, info, timeout, from, state)
 
       _nil ->
-        _ = Logger.error("ScriptServer await, job #{job_id} not found")
+        _ = Logger.error("ScriptServer await, key #{inspect(key)} not found")
         {:reply, {:error, :not_found}, state}
     end
   end
@@ -242,6 +207,7 @@ defmodule LogWatcher.ScriptServer do
         {:reply, :ok, next_state}
 
       _nil ->
+        _ = Logger.error("ScriptServer update_os_pid, key #{inspect(task_ref)} not found")
         {:reply, {:error, :not_found}, state}
     end
   end
@@ -422,9 +388,23 @@ defmodule LogWatcher.ScriptServer do
     end)
   end
 
-  @spec find_task_by_job_id(integer(), state()) :: {reference(), TaskInfo.t()} | nil
-  defp find_task_by_job_id(job_id, state) do
-    Enum.find(state, fn {_ref, %TaskInfo{job_id: id}} -> id == job_id end)
+  @spec find_task_by_key(task_key(), state()) :: {reference(), TaskInfo.t()} | nil
+  defp find_task_by_key(key, state) when is_reference(key) do
+    case Map.get(state, key) do
+      %TaskInfo{} = info ->
+        {key, info}
+
+      _nil ->
+        nil
+    end
+  end
+
+  defp find_task_by_key(key, state) when is_integer(key) do
+    Enum.find(state, fn {_ref, %TaskInfo{job_id: job_id}} -> job_id == key end)
+  end
+
+  defp find_task_by_key(key, state) when is_binary(key) do
+    Enum.find(state, fn {_ref, %TaskInfo{task_id: task_id}} -> task_id == key end)
   end
 
   @spec send_sigint_or_set_pending(reference(), TaskInfo.t(), state()) ::
