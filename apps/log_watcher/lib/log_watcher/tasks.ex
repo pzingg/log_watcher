@@ -236,7 +236,6 @@ defmodule LogWatcher.Tasks do
     log_prefix = Regex.replace(~r/-log\.json.?$/, log_file_name, "")
 
     with session_and_archive_params <- %{
-           "session_id" => session_id,
            "session_log_path" => session_log_path,
            "log_file_name" => log_file_name,
            "log_file_path" => log_file_path,
@@ -245,9 +244,13 @@ defmodule LogWatcher.Tasks do
          },
          file_name_params <-
            Regex.named_captures(
-             ~r/^(?<task_id>[^-]+)-(?<task_type>[^-]+)-(?<gen>\d+)/,
+             ~r/^(?<session_id>[^-]+)-(?<gen>\d+)-(?<task_type>[^-]+)-(?<task_id>[^-]+)/,
              log_file_name
            ) do
+      if !is_map(file_name_params) do
+        raise "Bad log file name #{log_file_name}"
+      end
+
       Map.merge(file_name_params, session_and_archive_params)
     end
   end

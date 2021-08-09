@@ -81,21 +81,21 @@ def mock_status(info, line_no, num_lines, error):
 
   return (info, result, errors)
 
-def make_log_prefix(task_id, task_type, gen):
+def make_log_prefix(session_id, gen, task_id, task_type):
   gen_str = str(gen).zfill(4)
-  return f'{task_id}-{task_type}-{gen_str}'
+  return f'{session_id}-{gen_str}-{task_type}-{task_id}'
 
-def log_file_name(task_id, task_type, gen):
-  return f'{make_log_prefix(task_id, task_type, gen)}-log.jsonl'
+def log_file_name(session_id, gen, task_id, task_type):
+  return f'{make_log_prefix(session_id, gen, task_id, task_type)}-log.jsonl'
 
-def arg_file_name(task_id, task_type, gen):
-  return f'{make_log_prefix(task_id, task_type, gen)}-arg.json'
+def arg_file_name(session_id, gen, task_id, task_type):
+  return f'{make_log_prefix(session_id, gen, task_id, task_type)}-arg.json'
 
-def start_file_name(task_id, task_type, gen):
-  return f'{make_log_prefix(task_id, task_type, gen)}-start.json'
+def start_file_name(session_id, gen, task_id, task_type):
+  return f'{make_log_prefix(session_id, gen, task_id, task_type)}-start.json'
 
-def result_file_name(task_id, task_type, gen):
-  return f'{make_log_prefix(task_id, task_type, gen)}-result.json'
+def result_file_name(session_id, gen, task_id, task_type):
+  return f'{make_log_prefix(session_id, gen, task_id, task_type)}-result.json'
 
 # No 'os_pid' in arg file
 ARG_KEYS = ['time', 'session_id', 'task_id', 'task_type', 'gen']
@@ -177,7 +177,7 @@ def log_error(error_type):
   trace = get_traceback(error_type)
   message = trace['error']
 
-  result_file = result_file_name(_global_args['task_id'], _global_args['task_type'], _global_args['gen'])
+  result_file = result_file_name(_global_args['session_id'], _global_args['gen'], _global_args['task_id'], _global_args['task_type'])
 
   result_info = {
     'succeeded': False,
@@ -226,7 +226,7 @@ def run_job():
   error = _global_args['error']
   os_pid = _global_args['os_pid']
 
-  log_file = log_file_name(task_id, task_type, gen)
+  log_file = log_file_name(session_id, gen, task_id, task_type)
   log_file_path = os.path.join(session_log_path, log_file)
   _global_args['log_f'] = log_file_path
   started_at = None
@@ -252,7 +252,7 @@ def run_job():
 
   signal.signal(signal.SIGINT, cancel_task)
 
-  arg_file = arg_file_name(task_id, task_type, gen)
+  arg_file = arg_file_name(session_id, gen, task_id, task_type)
   info, task_args = read_arg_file(info, arg_file)
 
   print(f'mock_task, task_args are {task_args}')
@@ -271,7 +271,7 @@ def run_job():
       write_start = True
   
     if info['status'] in ['cancelled', 'completed']:
-      result_file = result_file_name(task_id, task_type, gen)
+      result_file = result_file_name(session_id, gen, task_id, task_type)
       if info['status'] == 'completed' and len(errors) == 0:
         result_info = {
           'succeeded': True,
@@ -292,7 +292,7 @@ def run_job():
 
     if write_start:
       print(f'mock_task, writing start file')
-      start_file = start_file_name(task_id, task_type, gen)
+      start_file = start_file_name(session_id, gen, task_id, task_type)
       write_start_file(start_file, info)
       write_start = False
       sleep_time = 0.25

@@ -105,7 +105,7 @@ init_logging <- function(log_file_path, level = futile.logger::INFO) {
 }
 
 setup_logging <- function(args) {
-  log_file <- log_file_name(args$task_id, args$task_type, args$gen)
+  log_file <- log_file_name(args$session_id, args$gen, args$task_id, args$task_type)
   log_file_path <- file.path(args$log_path, log_file)
   init_logging(log_file_path)
 
@@ -186,26 +186,26 @@ session_log_file_name <- function(session_id) {
   paste0(session_id, "-sesslog.jsonl")
 }
 
-make_log_prefix <- function(task_id, task_type, gen) {
+make_log_prefix <- function(session_id, gen, task_id, task_type) {
   gen_str <- paste0("0000", gen)
   gen_str <- substring(gen_str, nchar(gen_str) - 3)
-  paste0(task_id, "-", task_type, "-", gen_str)
+  paste0(session_id, "-", gen_str, "-", task_type, "-", task_id)
 }
 
-log_file_name <- function(task_id, task_type, gen) {
-  paste0(make_log_prefix(task_id, task_type, gen), "-log.jsonl")
+log_file_name <- function(session_id, gen, task_id, task_type) {
+  paste0(make_log_prefix(session_id, gen, task_id, task_type), "-log.jsonl")
 }
 
-arg_file_name <- function(task_id, task_type, gen) {
-  paste0(make_log_prefix(task_id, task_type, gen), "-arg.json")
+arg_file_name <- function(session_id, gen, task_id, task_type) {
+  paste0(make_log_prefix(session_id, gen, task_id, task_type), "-arg.json")
 }
 
-start_file_name <- function(task_id, task_type, gen) {
-  paste0(make_log_prefix(task_id, task_type, gen), "-start.json")
+start_file_name <- function(session_id, gen, task_id, task_type) {
+  paste0(make_log_prefix(session_id, gen, task_id, task_type), "-start.json")
 }
 
-result_file_name <- function(task_id, task_type, gen) {
-  paste0(make_log_prefix(task_id, task_type, gen), "-result.json")
+result_file_name <- function(session_id, gen, task_id, task_type) {
+  paste0(make_log_prefix(session_id, gen, task_id, task_type), "-result.json")
 }
 
 ## Main logging functions
@@ -261,7 +261,7 @@ log_error <- function(cond, args) {
   if (is.null(args)) {
     result_file <- NULL
   } else {
-    result_file <- result_file_name(args$task_id, args$task_type, args$gen)
+    result_file <- result_file_name(args$session_id, args$gen, args$task_id, args$task_type)
   }
 
   result_info <- list(

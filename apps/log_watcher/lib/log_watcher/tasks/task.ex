@@ -83,9 +83,9 @@ defmodule LogWatcher.Tasks.Task do
   # mostly an occasional function which returns a value that can be
   # computed from the schema fields (including its associations).
 
-  @spec arg_file_name(String.t(), String.t(), integer()) :: String.t()
-  def arg_file_name(task_id, task_type, gen) do
-    "#{make_log_prefix(task_id, task_type, gen)}-arg.json"
+  @spec arg_file_name(String.t(), integer(), String.t(), String.t()) :: String.t()
+  def arg_file_name(session_id, gen, task_id, task_type) do
+    "#{make_log_prefix(session_id, gen, task_id, task_type)}-arg.json"
   end
 
   @spec arg_file_name(t()) :: String.t()
@@ -95,16 +95,16 @@ defmodule LogWatcher.Tasks.Task do
 
   @spec log_file_glob(String.t() | t()) :: String.t()
   def log_file_glob(task_id) when is_binary(task_id) do
-    "#{task_id}-*-log.json?"
+    "*#{task_id}-log.json?"
   end
 
   def log_file_glob(%__MODULE__{task_id: task_id}) do
-    "#{task_id}-*-log.json?"
+    "*#{task_id}-log.json?"
   end
 
-  @spec log_file_name(String.t(), String.t(), integer(), boolean()) :: String.t()
-  def log_file_name(task_id, task_type, gen, is_archived \\ false) do
-    "#{make_log_prefix(task_id, task_type, gen)}-log.#{log_extension(is_archived)}"
+  @spec log_file_name(String.t(), integer(), String.t(), String.t(), boolean()) :: String.t()
+  def log_file_name(session_id, gen, task_id, task_type, is_archived \\ false) do
+    "#{make_log_prefix(session_id, gen, task_id, task_type)}-log.#{log_extension(is_archived)}"
   end
 
   @spec log_file_name(t()) :: String.t()
@@ -117,9 +117,9 @@ defmodule LogWatcher.Tasks.Task do
     "#{log_prefix}-start.json"
   end
 
-  @spec result_file_name(String.t(), String.t(), integer()) :: String.t()
-  def result_file_name(task_id, task_type, gen) do
-    "#{make_log_prefix(task_id, task_type, gen)}-result.json"
+  @spec result_file_name(String.t(), integer(), String.t(), String.t()) :: String.t()
+  def result_file_name(session_id, gen, task_id, task_type) do
+    "#{make_log_prefix(session_id, gen, task_id, task_type)}-result.json"
   end
 
   @spec result_file_name(t()) :: String.t()
@@ -127,10 +127,10 @@ defmodule LogWatcher.Tasks.Task do
     "#{log_prefix}-result.json"
   end
 
-  @spec make_log_prefix(String.t(), String.t(), integer()) :: String.t()
-  def make_log_prefix(task_id, task_type, gen) do
+  @spec make_log_prefix(String.t(), integer(), String.t(), String.t()) :: String.t()
+  def make_log_prefix(session_id, gen, task_id, task_type) do
     gen_str = to_string(gen) |> String.pad_leading(4, "0")
-    "#{task_id}-#{task_type}-#{gen_str}"
+    "#{session_id}-#{gen_str}-#{task_type}-#{task_id}"
   end
 
   @spec log_extension(boolean()) :: String.t()

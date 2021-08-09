@@ -42,14 +42,15 @@ number:
 
 * session_id-sesslog.jsonl - Records session events, including task starts 
   and completions.
-* task_id-task_type-gen-log.jsonl - Active task progress log. Each line 
-  contains timestamp, task info, phase, state, progress_completed, 
+* session_id-task_id-task_type-gen-log.jsonl - Active task progress log. 
+  Each line contains timestamp, task info, phase, state, progress_completed, 
   progress_total, message)
-* task_id-task_type-gen-log.jsonx - Task progress log after it has been archived.
-* task_id-task_type-gen-start.json - Task start file. Contains task info,
-  started_at, os_pid, status, start result or errors.
-* task_id-task_type-gen-result.json - Task result file. Contains task info
-  completed_at, os_pid, status, completion result or errors.
+* session_id-task_id-task_type-gen-log.jsonx - Task progress log after it 
+  has been archived.
+* session_id-task_id-task_type-gen-start.json - Task start file. Contains 
+  task info, started_at, os_pid, status, start result or errors.
+* session_id-task_id-task_type-gen-result.json - Task result file. Contains 
+  task info, completed_at, os_pid, status, completion result or errors.
 
 
 ### Arguments file

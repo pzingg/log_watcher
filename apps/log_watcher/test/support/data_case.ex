@@ -68,12 +68,12 @@ defmodule LogWatcher.DataCase do
     task_ref
   end
 
-  @spec assert_script_errors(term(), String.t(), String.t(), String.t()) ::
+  @spec assert_script_errors(term(), String.t(), String.t() | [String.t()], String.t()) ::
           {reference(), [term()]}
   def assert_script_errors(
         start_result,
         task_id,
-        expected_category,
+        expected_categories,
         expected_status \\ "completed"
       ) do
     {:ok, %{task_id: job_task_id, status: status, message: _message, task_ref: task_ref} = info} =
@@ -85,7 +85,8 @@ defmodule LogWatcher.DataCase do
     assert !is_nil(errors)
     first_error = hd(errors)
     assert !is_nil(first_error)
-    assert first_error.category == expected_category
+    categories = List.wrap(expected_categories)
+    assert Enum.member?(categories, first_error.category)
     task_ref
   end
 

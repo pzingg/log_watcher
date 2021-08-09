@@ -110,7 +110,7 @@ defmodule LogWatcher.TaskStarter do
       ) do
     _ = Logger.error("watch_and_run")
 
-    log_file = Task.log_file_name(task_id, task_type, gen)
+    log_file = Task.log_file_name(session_id, gen, task_id, task_type)
     script_file = Map.fetch!(task_args, "script_file")
 
     # Set up to receive messages
@@ -144,7 +144,9 @@ defmodule LogWatcher.TaskStarter do
       |> Map.put_new("num_lines", 10)
       |> json_encode_decode(:atoms)
 
-    arg_path = Path.join(session_log_path, Task.arg_file_name(task_id, task_type, gen))
+    arg_path =
+      Path.join(session_log_path, Task.arg_file_name(session_id, gen, task_id, task_type))
+
     _ = Logger.info("task #{task_id}: write arg file to #{arg_path}")
 
     :ok = Tasks.write_arg_file(arg_path, start_args)

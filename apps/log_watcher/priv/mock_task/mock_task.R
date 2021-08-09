@@ -44,7 +44,7 @@ run_job <- function(args) {
   jcat("log file created\n")
 
   set_script_status("reading")
-  arg_file <- arg_file_name(task_id, task_type, gen)
+  arg_file <- arg_file_name(session_id, gen, task_id, task_type)
   arg_path <- file.path(session_log_path, arg_file)
   if (identical(error, "reading")) {
     blowup_a()
@@ -80,7 +80,7 @@ run_job <- function(args) {
     }
 
     if (status %in% c("cancelled", "completed")) {
-      result_file <- result_file_name(task_id, task_type, gen)
+      result_file <- result_file_name(session_id, gen, task_id, task_type)
       if (identical(status, "completed") && length(errors) == 0) {
         result_info <- list(
           succeeded = TRUE,
@@ -100,7 +100,7 @@ run_job <- function(args) {
     }
 
     if (write_start) {
-      start_file <- start_file_name(task_id, task_type, gen)
+      start_file <- start_file_name(session_id, gen, task_id, task_type)
       write_start_file(start_file, res)
       jcat("wrote start\n")
       write_start <- FALSE
