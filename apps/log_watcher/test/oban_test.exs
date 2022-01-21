@@ -19,10 +19,11 @@ defmodule LogWatcher.ObanTest do
     _ = Tasks.archive_session_tasks(session)
 
     args = %{
-      session_id: session.session_id,
+      session_id: session.id,
       name: session.name,
       description: session.description,
-      session_log_path: session.session_log_path,
+      tag: session.tag,
+      session_log_path: session.log_path,
       gen: session.gen,
       task_id: task_id,
       task_type: task_type,
@@ -50,10 +51,11 @@ defmodule LogWatcher.ObanTest do
     _ = Logger.error("inserted new job #{job_id}, state #{state}")
 
     match_args = %{
-      session_id: session.session_id,
+      session_id: session.id,
       name: session.name,
       description: session.description,
-      session_log_path: session.session_log_path,
+      tag: session.tag,
+      session_log_path: session.log_path,
       gen: session.gen,
       task_id: task_id,
       task_type: task_type,

@@ -5,7 +5,8 @@ defmodule LogWatcher.Tasks do
   import Ecto.Query
 
   alias LogWatcher.Repo
-  alias LogWatcher.Tasks.{Session, Task}
+  alias LogWatcher.Sessions.Session
+  alias LogWatcher.Tasks.Task
 
   require Logger
 
@@ -31,84 +32,6 @@ defmodule LogWatcher.Tasks do
     |> Repo.one()
   end
 
-  ### Sessions on disk
-
-  # See https://medium.com/very-big-things/towards-maintainable-elixir-the-core-and-the-interface-c267f0da43
-  # for tips on architecting schemaless changesets, input normalization, and contexts.
-
-  # We don’t keep public changeset functions in the schema module.
-  # This approach consolidates the parts which are logically tightly
-  # coupled. The changeset building logic is typically needed by a
-  # single context function, or occasionally by a couple of related
-  # contexts functions (e.g. update and create).
-
-  # Consequently, our schema modules usually contain very little logic,
-  # mostly an occasional function which returns a value that can be
-  # computed from the schema fields (including its associations).
-
-  # We usually start by keeping the changeset builder code directly
-  # in the context function. However, if the logic becomes more complex,
-  # or if the changeset builder code needs to be shared between multiple
-  # functions, the builder code can be extracted into a separate private
-  # function. We avoid creating public changeset builder functions,
-  # because this leads to weakly typed abstractions which return overly
-  # vague free-form data.
-
-  @doc """
-  Create a Session struct object from an id and path.
-  """
-  @spec create_session!(String.t(), String.t(), String.t(), String.t(), integer()) :: Session.t()
-  def create_session!(session_id, name, description, session_log_path, gen) do
-    create_session(session_id, name, description, session_log_path, gen)
-    |> LogWatcher.maybe_raise_input_error("Errors creating session", :session_id)
-  end
-
-  @spec create_session(String.t(), String.t(), String.t(), String.t(), integer()) ::
-          {:ok, Session.t()} | {:error, term()}
-  def create_session(session_id, name, description, session_log_path, gen) do
-    %{
-      "session_id" => session_id,
-      "name" => name,
-      "description" => description,
-      "session_log_path" => session_log_path,
-      "gen" => gen
-    }
-    |> normalize_session_create_input()
-    |> Ecto.Changeset.apply_action(:insert)
-    |> maybe_init_session_log()
-  end
-
-  @spec normalize_session_create_input(map()) :: Ecto.Changeset.t()
-  defp normalize_session_create_input(params) do
-    fields = [:session_id, :name, :description, :session_log_path, :gen]
-
-    Session.new()
-    |> Ecto.Changeset.cast(params, fields)
-    |> Ecto.Changeset.validate_required(Session.required_fields(fields))
-  end
-
-  defp maybe_init_session_log({:ok, %Session{} = session}) do
-    Session.write_event(session, :create_session)
-  end
-
-  defp maybe_init_session_log(other), do: other
-
-  @spec update_session(Session.t(), map()) ::
-          {:ok, Session.t()} | {:error, Ecto.Changeset.t()}
-  def update_session(session, params) do
-    normalize_session_update_input(session, params)
-    |> Ecto.Changeset.apply_action(:update)
-  end
-
-  @spec normalize_session_update_input(Session.t(), map()) :: Ecto.Changeset.t()
-  defp normalize_session_update_input(session, params) do
-    fields = [:gen]
-
-    session
-    |> Ecto.Changeset.cast(params, fields)
-    |> Ecto.Changeset.validate_required(Session.required_fields(fields))
-  end
-
   ### Task files on disk
 
   @spec archive_session_tasks(Session.t()) :: [{String.t(), :ok | {:error, term()}}]
@@ -120,7 +43,7 @@ defmodule LogWatcher.Tasks do
 
   @spec list_task_log_files(Session.t(), boolean()) :: [String.t()]
   def list_task_log_files(
-        %Session{session_id: session_id, session_log_path: session_log_path},
+        %Session{id: session_id, log_path: session_log_path},
         include_archived \\ false
       ) do
     log_files_for_session(session_log_path, include_archived)
@@ -140,7 +63,7 @@ defmodule LogWatcher.Tasks do
 
   @spec list_tasks(Session.t(), boolean()) :: [Task.t()]
   def list_tasks(
-        %Session{session_id: session_id, session_log_path: session_log_path},
+        %Session{id: session_id, log_path: session_log_path},
         include_archived \\ false
       ) do
     log_files_for_session(session_log_path, include_archived)
@@ -148,7 +71,7 @@ defmodule LogWatcher.Tasks do
   end
 
   @spec get_task(Session.t(), String.t()) :: Task.t() | nil
-  def get_task(%Session{session_id: session_id, session_log_path: session_log_path}, task_id) do
+  def get_task(%Session{id: session_id, log_path: session_log_path}, task_id) do
     case log_files_for_task(session_log_path, task_id) do
       [] ->
         nil
@@ -172,7 +95,7 @@ defmodule LogWatcher.Tasks do
   end
 
   @spec archive_task(Session.t(), String.t()) :: [{String.t(), :ok | {:error, term()}}]
-  def archive_task(%Session{session_log_path: session_log_path}, task_id) do
+  def archive_task(%Session{log_path: session_log_path}, task_id) do
     log_files = log_files_for_task(session_log_path, task_id)
 
     if Enum.empty?(log_files) do
@@ -251,7 +174,15 @@ defmodule LogWatcher.Tasks do
         raise "Bad log file name #{log_file_name}"
       end
 
-      Map.merge(file_name_params, session_and_archive_params)
+      params =
+        if file_name_params["session_id"] != session_id do
+          Logger.error("session_id in log file name does not match session")
+          Map.put(file_name_params, "session_id", session_id)
+        else
+          file_name_params
+        end
+
+      Map.merge(params, session_and_archive_params)
     end
   end
 

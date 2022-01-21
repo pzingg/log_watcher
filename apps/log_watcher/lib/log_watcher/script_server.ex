@@ -15,7 +15,7 @@ defmodule LogWatcher.ScriptServer do
 
   require Logger
 
-  alias LogWatcher.Tasks.Session
+  alias LogWatcher.Sessions.Session
 
   defmodule TaskInfo do
     @enforce_keys [:task, :task_id, :job_id]
@@ -520,7 +520,7 @@ defmodule LogWatcher.ScriptServer do
           {term(), state()}
   defp shutdown_and_remove_task(
          task_ref,
-         %TaskInfo{task: task, task_id: task_id} = info,
+         %TaskInfo{task: task, task_id: task_id},
          state
        ) do
     next_state = demonitor_and_remove_task(task_ref, state)

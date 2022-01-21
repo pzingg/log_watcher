@@ -1,59 +1,52 @@
-defmodule LogWatcher.Tasks.Session do
+defmodule LogWatcher.Sessions.Session do
   @moduledoc """
-  Defines a Session struct for use with schemaless changesets.
-  Sessions are not stored in a SQL database.
-
   A session represents a directory on the file system that will
   contain the executable scripts, data and log files necessary to
   perform long running tasks.  Each session has a required
   `:name` and `:description`, and a unique ID, the `:session_id`
   (usually a UUID or ULID).
   """
-
-  use TypedStruct
+  use Ecto.Schema
+  import Ecto.Changeset
 
   require Logger
 
-  typedstruct do
-    @typedoc "A daptics session on disk somewhere"
+  alias LogWatcher.Accounts.User
+  alias LogWatcher.Sessions.Event
 
-    plugin(TypedStructEctoChangeset)
-    field(:session_id, String.t(), enforce: true)
-    field(:name, String.t(), enforce: true)
-    field(:description, String.t(), enforce: true)
-    field(:session_log_path, String.t(), enforce: true)
-    field(:gen, integer(), default: -1)
+  @type t() :: %__MODULE__{
+          id: Ecto.ULID.t(),
+          name: String.t(),
+          description: String.t(),
+          tag: String.t(),
+          log_path: String.t(),
+          gen: integer() | nil,
+          acked_event_id: integer() | nil,
+          user_id: Ecto.ULID.t(),
+          inserted_at: DateTime.t(),
+          updated_at: DateTime.t()
+        }
+
+  @primary_key {:id, Ecto.ULID, autogenerate: true}
+  schema "sessions" do
+    field(:name, :string)
+    field(:description, :string)
+    field(:tag, :string)
+    field(:log_path, :string)
+    field(:gen, :integer)
+    field(:acked_event_id, :integer)
+    belongs_to(:user, User)
+    has_many(:events, Event)
+
+    timestamps()
   end
-
-  @spec new() :: t()
-  def new() do
-    nil_values =
-      @enforce_keys
-      |> Enum.map(fn key -> {key, nil} end)
-
-    Kernel.struct(__MODULE__, nil_values)
-  end
-
-  @spec required_fields([atom()]) :: [atom()]
-  def required_fields(fields \\ [])
-  def required_fields([]), do: @enforce_keys
-
-  def required_fields(fields) when is_list(fields) do
-    @enforce_keys -- @enforce_keys -- fields
-  end
-
-  @spec all_fields() :: [atom()]
-  def all_fields(), do: Keyword.keys(@changeset_fields)
-
-  @spec changeset_types() :: [{atom(), atom()}]
-  def changeset_types(), do: @changeset_fields
 
   @spec log_file_name(String.t() | t()) :: String.t()
   def log_file_name(session_id) when is_binary(session_id) do
     "#{session_id}-sesslog.jsonl"
   end
 
-  def log_file_name(%__MODULE__{session_id: session_id}) do
+  def log_file_name(%__MODULE__{id: session_id}) do
     "#{session_id}-sesslog.jsonl"
   end
 
@@ -63,7 +56,7 @@ defmodule LogWatcher.Tasks.Session do
     "session:#{session_id}"
   end
 
-  def events_topic(%__MODULE__{session_id: session_id}) do
+  def events_topic(%__MODULE__{id: session_id}) do
     "session:#{session_id}"
   end
 
@@ -81,7 +74,7 @@ defmodule LogWatcher.Tasks.Session do
 
   @spec write_event(t(), atom(), Keyword.t()) :: {:ok, t()} | {:error, term()}
   def write_event(
-        %__MODULE__{session_id: session_id, session_log_path: session_log_path} = session,
+        %__MODULE__{id: session_id, log_path: session_log_path} = session,
         event_type,
         opts \\ []
       ) do
@@ -95,12 +88,46 @@ defmodule LogWatcher.Tasks.Session do
     end
   end
 
+  def to_map(session) do
+    map =
+      Map.from_struct(session)
+      |> Map.drop([
+        :__meta__,
+        :user,
+        :events,
+        :user_id,
+        :acked_event_id,
+        :inserted_at,
+        :updated_at
+      ])
+
+    map
+    |> Map.merge(%{session_id: map.id, session_log_path: map.log_path})
+    |> Map.drop([:id, :log_path])
+  end
+
   @spec create_event(t(), atom(), Keyword.t()) :: map()
   def create_event(%__MODULE__{} = session, event_type, opts \\ []) do
     event =
-      Map.from_struct(session)
+      session
+      |> to_map()
       |> Map.merge(%{time: LogWatcher.format_utcnow(), event: event_type})
 
     Enum.into(opts, event)
+  end
+
+  @doc false
+  def changeset(session, attrs) do
+    session
+    |> cast(attrs, [:name, :description, :tag, :log_path, :gen, :acked_event_id])
+    |> validate_required([:name, :description, :tag, :log_path])
+    |> unique_constraint(:tag)
+  end
+
+  @doc false
+  def update_gen_changeset(session, attrs) do
+    session
+    |> cast(attrs, [:gen])
+    |> validate_required([:gen])
   end
 end

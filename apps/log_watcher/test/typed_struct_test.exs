@@ -1,39 +1,7 @@
 defmodule LogWatcher.TypedStructTest do
   use LogWatcher.DataCase
 
-  alias LogWatcher.Tasks.{Session, Task}
-
-  test "01 session new" do
-    session = Session.new()
-
-    assert is_nil(session.session_id)
-    assert session.gen == -1
-  end
-
-  test "02 session ecto types" do
-    assert Enum.sort(Session.required_fields()) == [
-             :description,
-             :name,
-             :session_id,
-             :session_log_path
-           ]
-
-    assert Enum.sort(Session.all_fields()) == [
-             :description,
-             :gen,
-             :name,
-             :session_id,
-             :session_log_path
-           ]
-
-    assert Enum.sort(Session.changeset_types()) == [
-             {:description, :string},
-             {:gen, :integer},
-             {:name, :string},
-             {:session_id, :string},
-             {:session_log_path, :string}
-           ]
-  end
+  alias LogWatcher.Tasks.Task
 
   test "03 task new" do
     task = Task.new()

@@ -9,8 +9,7 @@ defmodule LogWatcher do
   Collection of utilities in this module.
   """
 
-  alias LogWatcher.{Tasks, TaskStarter}
-  alias LogWatcher.Tasks.Session
+  alias LogWatcher.{Sessions, Tasks, TaskStarter}
 
   ## General utilities
 
@@ -80,18 +79,25 @@ defmodule LogWatcher do
     TaskStarter.watch_and_run(session, task_id, task_type, task_args)
   end
 
+  def mock_task_base_dir() do
+    Path.join([:code.priv_dir(:log_watcher), "mock_task", "sessions"])
+  end
+
+  defp mock_tag() do
+    Ecto.ULID.generate()
+  end
+
   @doc """
   Create random arguments for a session and task.
   """
   @spec mock_task_args(String.t(), Keyword.t()) :: map()
   def mock_task_args(description, opts) do
-    session_id = Faker.Util.format("S%4d")
-    session_log_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", "output"])
-    gen = :random.uniform(10) - 1
+    tag = mock_tag()
+    session_log_path = Path.join([mock_task_base_dir(), tag, "output"])
+    File.mkdir_p(session_log_path)
+    gen = :rand.uniform(10) - 1
     name = to_string(description) |> String.slice(0..10) |> String.trim()
-
-    {:ok, %Session{} = session} =
-      Tasks.create_session(session_id, name, description, session_log_path, gen)
+    session = Sessions.create_session!(name, description, tag, session_log_path, gen)
 
     %{
       session: session,
@@ -101,7 +107,7 @@ defmodule LogWatcher do
         "script_file" => Keyword.get(opts, :script_file, "mock_task.R"),
         "error" => Keyword.get(opts, :error, ""),
         "cancel" => Keyword.get(opts, :cancel, false),
-        "num_lines" => :random.uniform(6) + 6,
+        "num_lines" => :rand.uniform(6) + 6,
         "space_type" => Faker.Util.pick(["mixture", "factorial", "sparsefactorial"])
       }
     }

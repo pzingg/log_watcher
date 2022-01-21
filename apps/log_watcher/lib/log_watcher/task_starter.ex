@@ -18,8 +18,9 @@ defmodule LogWatcher.TaskStarter do
 
   require Logger
 
-  alias LogWatcher.{FileWatcherSupervisor, ScriptServer, Tasks}
-  alias LogWatcher.Tasks.{Session, Task}
+  alias LogWatcher.{FileWatcherSupervisor, ScriptServer, Sessions, Tasks}
+  alias LogWatcher.Sessions.Session
+  alias LogWatcher.Tasks.Task
 
   defmodule LoopInfo do
     @enforce_keys [:expiry, :job_id, :task_id, :task_ref, :cancel]
@@ -52,7 +53,8 @@ defmodule LogWatcher.TaskStarter do
           {:ok, Oban.Job.t()} | {:error, Oban.Job.changeset()} | {:error, term()}
   def insert_job(session, task_id, task_type, task_args, opts \\ []) do
     result =
-      Map.from_struct(session)
+      session
+      |> Session.to_map()
       |> Map.merge(%{task_id: task_id, task_type: task_type, task_args: task_args})
       |> __MODULE__.new(opts)
       |> Oban.insert()
@@ -86,8 +88,8 @@ defmodule LogWatcher.TaskStarter do
         gen_arg
       end
 
-    Tasks.create_session!(session_id, name, description, session_log_path, gen)
-    |> watch_and_run(task_id, task_type, Map.put(task_args, "oban_job_id", job_id))
+    session = Sessions.get_session!(session_id)
+    watch_and_run(session, task_id, task_type, Map.put(task_args, "oban_job_id", job_id))
   end
 
   def perform(%Oban.Job{id: job_id, args: args}) do
@@ -103,7 +105,7 @@ defmodule LogWatcher.TaskStarter do
   @spec watch_and_run(Session.t(), String.t(), String.t(), map()) ::
           {:ok, term()} | {:discard, term()}
   def watch_and_run(
-        %Session{session_id: session_id, session_log_path: session_log_path, gen: gen},
+        %Session{id: session_id, log_path: session_log_path, gen: gen},
         task_id,
         task_type,
         task_args

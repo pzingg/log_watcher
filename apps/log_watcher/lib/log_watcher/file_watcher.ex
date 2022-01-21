@@ -39,7 +39,7 @@ defmodule LogWatcher.FileWatcher do
 
   require Logger
 
-  alias LogWatcher.Tasks.Session
+  alias LogWatcher.Sessions.Session
 
   defmodule WatchedFile do
     @enforce_keys [:stream]
