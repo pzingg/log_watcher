@@ -18,9 +18,9 @@ defmodule LogWatcher.FileWatcherSupervisor do
   """
   @spec start_child_and_watch_file(String.t(), String.t(), String.t()) ::
           :ignore | {:ok, pid()} | {:error, term()}
-  def start_child_and_watch_file(session_id, session_log_path, log_file) do
-    with {:ok, pid} <- start_child(session_id, session_log_path),
-         {:ok, _file} <- FileWatcher.add_watch(session_id, log_file) do
+  def start_child_and_watch_file(session_id, log_dir, log_file) do
+    with {:ok, pid} <- start_child(session_id, log_dir),
+         {:ok, _file} <- FileWatcher.add_watch(session_id, log_file, self()) do
       {:ok, pid}
     end
   end
@@ -31,8 +31,8 @@ defmodule LogWatcher.FileWatcherSupervisor do
   directory.
   """
   @spec start_child(String.t(), String.t()) :: :ignore | {:ok, pid()} | {:error, term()}
-  def start_child(session_id, session_log_path) do
-    spec = {LogWatcher.FileWatcher, session_id: session_id, session_log_path: session_log_path}
+  def start_child(session_id, log_dir) do
+    spec = {LogWatcher.FileWatcher, session_id: session_id, log_dir: log_dir}
 
     case DynamicSupervisor.start_child(__MODULE__, spec) do
       {:ok, pid} ->

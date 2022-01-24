@@ -19,7 +19,7 @@ defmodule LogWatcher.Sessions.Session do
           name: String.t(),
           description: String.t(),
           tag: String.t(),
-          log_path: String.t(),
+          log_dir: String.t(),
           gen: integer() | nil,
           acked_event_id: integer() | nil,
           user_id: Ecto.ULID.t(),
@@ -28,11 +28,12 @@ defmodule LogWatcher.Sessions.Session do
         }
 
   @primary_key {:id, Ecto.ULID, autogenerate: true}
+  @timestamps_opts [type: :utc_datetime]
   schema "sessions" do
     field(:name, :string)
     field(:description, :string)
     field(:tag, :string)
-    field(:log_path, :string)
+    field(:log_dir, :string)
     field(:gen, :integer)
     field(:acked_event_id, :integer)
     belongs_to(:user, User)
@@ -67,22 +68,27 @@ defmodule LogWatcher.Sessions.Session do
   end
 
   @spec broadcast(String.t(), term()) :: :ok | {:error, term()}
-  def broadcast(topic, message) when is_tuple(message) do
-    _ = Logger.info("#{inspect(self())} broadcasting :#{Kernel.elem(message, 0)} to #{topic}")
-    Phoenix.PubSub.broadcast(LogWatcher.PubSub, topic, message)
+  def broadcast(topic, {event_type, data} = message) do
+    LogWatcher.Pipeline.Handler.sync_notify(%{event_type: event_type, topic: topic, data: data})
+    :ok
+  end
+
+  def broadcast(topic, message) do
+    Logger.error("broadcast error: topic #{topic} message is not a 2-tuple: #{inspect(message)}")
+    {:error, :bad_message}
   end
 
   @spec write_event(t(), atom(), Keyword.t()) :: {:ok, t()} | {:error, term()}
   def write_event(
-        %__MODULE__{id: session_id, log_path: session_log_path} = session,
+        %__MODULE__{id: session_id, log_dir: log_dir} = session,
         event_type,
         opts \\ []
       ) do
-    event = create_event(session, event_type, opts)
+    event = log_event(session, event_type, opts)
 
     with {:ok, content} <- Jason.encode(event) do
       file_name = log_file_name(session_id)
-      log_file_path = Path.join(session_log_path, file_name)
+      log_file_path = Path.join(log_dir, file_name)
       File.write(log_file_path, content <> "\n")
       {:ok, session}
     end
@@ -102,12 +108,12 @@ defmodule LogWatcher.Sessions.Session do
       ])
 
     map
-    |> Map.merge(%{session_id: map.id, session_log_path: map.log_path})
-    |> Map.drop([:id, :log_path])
+    |> Map.put(:session_id, map.id)
+    |> Map.delete(:id)
   end
 
-  @spec create_event(t(), atom(), Keyword.t()) :: map()
-  def create_event(%__MODULE__{} = session, event_type, opts \\ []) do
+  @spec log_event(t(), atom(), Keyword.t()) :: map()
+  def log_event(%__MODULE__{} = session, event_type, opts \\ []) do
     event =
       session
       |> to_map()
@@ -119,8 +125,8 @@ defmodule LogWatcher.Sessions.Session do
   @doc false
   def changeset(session, attrs) do
     session
-    |> cast(attrs, [:name, :description, :tag, :log_path, :gen, :acked_event_id])
-    |> validate_required([:name, :description, :tag, :log_path])
+    |> cast(attrs, [:name, :description, :tag, :log_dir, :gen, :acked_event_id])
+    |> validate_required([:name, :description, :tag, :log_dir])
     |> unique_constraint(:tag)
   end
 

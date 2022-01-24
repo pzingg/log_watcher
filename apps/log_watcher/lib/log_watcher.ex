@@ -93,11 +93,11 @@ defmodule LogWatcher do
   @spec mock_task_args(String.t(), Keyword.t()) :: map()
   def mock_task_args(description, opts) do
     tag = mock_tag()
-    session_log_path = Path.join([mock_task_base_dir(), tag, "output"])
-    File.mkdir_p(session_log_path)
+    log_dir = Path.join([mock_task_base_dir(), tag, "output"])
+    File.mkdir_p(log_dir)
     gen = :rand.uniform(10) - 1
     name = to_string(description) |> String.slice(0..10) |> String.trim()
-    session = Sessions.create_session!(name, description, tag, session_log_path, gen)
+    session = Sessions.create_session!(name, description, tag, log_dir, gen)
 
     %{
       session: session,
@@ -111,5 +111,17 @@ defmodule LogWatcher do
         "space_type" => Faker.Util.pick(["mixture", "factorial", "sparsefactorial"])
       }
     }
+  end
+
+  @doc """
+  Run a script forever, so we can observe the supervision tree.
+  """
+  def run_mock_task_forever() do
+    %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
+      LogWatcher.mock_task_args("Run forever", script_file: "mock_task.R", error: "forever")
+
+    _ = Tasks.archive_session_tasks(session)
+
+    _loop_info = TaskStarter.start_watcher_and_script(session, task_id, task_type, task_args)
   end
 end

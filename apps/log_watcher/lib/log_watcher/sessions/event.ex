@@ -23,27 +23,30 @@ defmodule LogWatcher.Sessions.Event do
           id: integer(),
           version: integer(),
           topic: String.t(),
+          type: String.t(),
           source: String.t() | nil,
           data: any(),
           session_id: Ecto.ULID.t(),
           transaction_id: String.t(),
           ttl: integer() | nil,
-          initialized_at: integer() | nil,
-          occurred_at: integer() | nil
+          initialized_at: DateTime.t() | nil,
+          occurred_at: DateTime.t() | nil
         }
 
   @primary_key {:id, :id, autogenerate: true}
+  @timestamps_opts [type: :utc_datetime, inserted_at: false, updated_at: :occurred_at]
   schema "events" do
     field(:version, :integer)
     field(:topic, :string)
+    field(:type, :string)
     field(:source, :string)
     field(:data, :map)
+    field(:session_id, Ecto.ULID)
     field(:transaction_id, :string)
     field(:ttl, :integer)
-    field(:initialized_at, :integer)
-    field(:occurred_at, :integer)
+    field(:initialized_at, :utc_datetime)
 
-    belongs_to :session, Session
+    timestamps()
   end
 
   @doc """
@@ -55,8 +58,8 @@ defmodule LogWatcher.Sessions.Event do
         initialized_at: initialized_at,
         occurred_at: occurred_at
       })
-      when is_integer(initialized_at) and is_integer(occurred_at) do
-    occurred_at - initialized_at
+      when not (is_nil(initialized_at) or is_nil(occurred_at)) do
+    DateTime.diff(occurred_at, initialized_at, :millisecond)
   end
 
   def duration(%__MODULE__{}) do
@@ -69,15 +72,53 @@ defmodule LogWatcher.Sessions.Event do
     |> cast(attrs, [
       :version,
       :topic,
+      :type,
       :source,
       :data,
-      :user_id,
       :session_id,
       :transaction_id,
       :ttl,
-      :initialized_at,
-      :occurred_at
+      :initialized_at
     ])
     |> validate_required([:topic, :data])
   end
+
+  # %{
+  #  data: %{
+  #    exit_status: 0,
+  #    gen: 9,
+  #    message: "read arg file",
+  #    session_id: "01FT49N8EHPPDR2BPD0R74R4AP",
+  #    log_dir: ".../sessions/01FT49N8CPDVQ9XV2P4G2GRWT7/output",
+  #    status: "completed",
+  #    task_id: "T3842",
+  #    task_type: "create",
+  #    time: "2022-01-23T12:22:23"
+  #  },
+  #  event_type: :script_terminated,
+  #  topic: "session:01FT49N8EHPPDR2BPD0R74R4AP"
+  # }
+
+  def log_watcher_changeset(event, %{data: raw_data} = raw_attrs) do
+    {event_type, attrs} = Map.pop!(raw_attrs, :event_type)
+    {event_attrs, data} = Map.split(raw_data, [:session_id, :task_type, :task_id, :time])
+
+    attrs =
+      Map.merge(attrs, %{
+        version: 1,
+        type: stringize(event_type),
+        data: data,
+        source: Map.get(event_attrs, :task_type),
+        session_id: Map.get(event_attrs, :session_id),
+        transaction_id: Map.get(event_attrs, :task_id),
+        initialized_at: Map.get_lazy(event_attrs, :time, fn -> DateTime.utc_now() end)
+      })
+
+    changeset(event, attrs)
+  end
+
+  defp stringize(nil), do: ""
+  defp stringize(v) when is_atom(v), do: Atom.to_string(v)
+  defp stringize(v) when is_binary(v), do: v
+  defp stringize(_), do: raise("Invalid type for stringize")
 end

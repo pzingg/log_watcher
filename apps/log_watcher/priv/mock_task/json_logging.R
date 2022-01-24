@@ -37,7 +37,7 @@ json_task_layout <- function(level, msg, id = "", ...) {
   message <- paste(msg, collapse = "\n")
   message_data <- list(
     session_id = getOption("daptics_session_id"),
-    session_log_path = getOption("daptics_session_log_path"),
+    log_dir = getOption("daptics_log_dir"),
     task_id = getOption("daptics_task_id"),
     task_type = getOption("daptics_task_type"),
     gen = getOption("daptics_task_gen"),
@@ -106,7 +106,7 @@ init_logging <- function(log_file_path, level = futile.logger::INFO) {
 
 setup_logging <- function(args) {
   log_file <- log_file_name(args$session_id, args$gen, args$task_id, args$task_type)
-  log_file_path <- file.path(args$log_path, log_file)
+  log_file_path <- file.path(args$log_dir, log_file)
   init_logging(log_file_path)
 
   jcat(paste0("logging setup done, will append to ", log_file_path, "\n"))
@@ -212,19 +212,19 @@ result_file_name <- function(session_id, gen, task_id, task_type) {
 
 log_event <- function(event_type, info) {
   event_file <- session_log_file_name(info$session_id)
-  path <- file.path(info$session_log_path, event_file)
+  path <- file.path(info$log_dir, event_file)
   con <- file(path, open = "at")
-  event <- create_event(event_type, info)
+  event <- build_event(event_type, info)
   writeLines(to_json_line(event, append_newline = FALSE), con = con)
   flush(con)
   close(con)
   con <- NULL
 }
 
-create_event <- function(event_type, info) {
+build_event <- function(event_type, info) {
   event <- list(
     session_id = getOption("daptics_session_id"),
-    session_log_path = getOption("daptics_session_log_path"),
+    log_dir = getOption("daptics_log_dir"),
     gen = getOption("daptics_task_gen"),
     task_id = getOption("daptics_task_id"),
     task_type = getOption("daptics_task_type"),
@@ -312,7 +312,7 @@ read_arg_file <- function(arg_path) {
   stopifnot(identical(args$gen, opt_gen))
 
   args["session_id"] <- NULL
-  args["session_log_path"] <- NULL
+  args["log_dir"] <- NULL
   args["task_id"] <- NULL
   args["task_type"] <- NULL
   args["gen"] <- NULL
@@ -330,12 +330,12 @@ read_arg_file <- function(arg_path) {
 write_start_file <- function(start_file, info) {
   info$time <- format_utcnow()
   info$session_id <- getOption("daptics_session_id")
-  info$session_log_path <- getOption("daptics_session_log_path")
+  info$log_dir <- getOption("daptics_log_dir")
   info$task_id <- getOption("daptics_task_id")
   info$task_type <- getOption("daptics_task_type")
   info$gen <- getOption("daptics_task_gen")
   info$os_pid <- getOption("daptics_script_pid")
-  path <- file.path(info$session_log_path, start_file)
+  path <- file.path(info$log_dir, start_file)
   cat(to_pretty_json(info), file = path)
 
   log_event("task_started", info)
@@ -352,7 +352,7 @@ write_result_file <- function(result_file, info, result_data) {
 
   info$time <- format_utcnow()
   info$session_id <- getOption("daptics_session_id")
-  info$session_log_path <- getOption("daptics_session_log_path")
+  info$log_dir <- getOption("daptics_log_dir")
   info$task_id <- getOption("daptics_task_id")
   info$task_type <- getOption("daptics_task_type")
   info$gen <- getOption("daptics_task_gen")
@@ -364,7 +364,7 @@ write_result_file <- function(result_file, info, result_data) {
     errors = info$result$errors,
     data = result_data
   )
-  path <- file.path(info$session_log_path, result_file)
+  path <- file.path(info$log_dir, result_file)
   cat(to_pretty_json(info), file = path)
 
   event_type <- paste0("task_", info$status)

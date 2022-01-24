@@ -11,7 +11,7 @@ class CancelException(RuntimeError):
   pass
 
 # TODO: put these in -log.jsonl, -start.json, and/or -result.json
-# 'time' 
+# 'time'
 # 'started_at'
 # 'completed_at'
 # 'result'
@@ -21,7 +21,7 @@ def format_utcnow():
   return datetime.datetime.utcnow().isoformat(timespec='milliseconds')
 
 def read_arg_file(info, arg_file):
-  path = os.path.join(info['session_log_path'], arg_file)
+  path = os.path.join(info['log_dir'], arg_file)
   with open(path, 'rt') as f:
     args = json.load(f)
     assert info['session_id'] == args['session_id']
@@ -29,7 +29,7 @@ def read_arg_file(info, arg_file):
     assert info['task_type'] == args['task_type']
     assert info['gen'] == args['gen']
 
-    for key in ['session_id', 'session_log_path', 'task_id', 'task_type', 'gen']:
+    for key in ['session_id', 'log_dir', 'task_id', 'task_type', 'gen']:
         if key in args:
             del args[key]
 
@@ -101,7 +101,7 @@ def result_file_name(session_id, gen, task_id, task_type):
 ARG_KEYS = ['time', 'session_id', 'task_id', 'task_type', 'gen']
 
 def write_start_file(start_file, info):
-  path = os.path.join(info['session_log_path'], start_file)
+  path = os.path.join(info['log_dir'], start_file)
   try:
     with open(path, 'wt') as f:
       json.dump(info, f, indent=2)
@@ -112,7 +112,7 @@ def write_start_file(start_file, info):
   log_event('task_started', info)
 
 def write_result_file(result_file, info, result_data):
-  path = os.path.join(info['session_log_path'], result_file)
+  path = os.path.join(info['log_dir'], result_file)
   try:
     with open(path, 'wt') as f:
       result_info = {k: v for k, v in info.items() if k not in ['result']}
@@ -132,7 +132,7 @@ def write_result_file(result_file, info, result_data):
 def log_event(event_type, info):
   info['event_type'] = event_type
   log_file = f'''{info['session_id']}-sesslog.jsonl'''
-  path = os.path.join(info['session_log_path'], log_file)
+  path = os.path.join(info['log_dir'], log_file)
   try:
     f = open(path, 'at')
     json.dump(info, f)
@@ -192,10 +192,10 @@ def log_error(error_type):
 
   set_script_status(status)
   info = {
-    'time': format_utcnow(), 
+    'time': format_utcnow(),
     'os_pid': _global_args['os_pid'],
     'session_id': _global_args['session_id'],
-    'session_log_path': _global_args['log_path'],
+    'log_dir': _global_args['log_dir'],
     'task_id': _global_args['task_id'],
     'task_type': _global_args['task_type'],
     'gen': _global_args['gen'],
@@ -218,7 +218,7 @@ def cancel_task(signal_number, frame):
 
 def run_job():
   global _global_args
-  session_log_path = _global_args['log_path']
+  log_dir = _global_args['log_dir']
   session_id = _global_args['session_id']
   task_id = _global_args['task_id']
   task_type = _global_args['task_type']
@@ -227,7 +227,7 @@ def run_job():
   os_pid = _global_args['os_pid']
 
   log_file = log_file_name(session_id, gen, task_id, task_type)
-  log_file_path = os.path.join(session_log_path, log_file)
+  log_file_path = os.path.join(log_dir, log_file)
   _global_args['log_f'] = log_file_path
   started_at = None
   running_at = None
@@ -236,12 +236,12 @@ def run_job():
 
   set_script_status('created')
   info = {
-    'time': format_utcnow(), 
+    'time': format_utcnow(),
     'os_pid': os_pid,
-    'session_id': session_id, 
-    'session_log_path': session_log_path,
-    'task_id': task_id, 
-    'task_type': task_type, 
+    'session_id': session_id,
+    'log_dir': log_dir,
+    'task_id': task_id,
+    'task_type': task_type,
     'gen': gen,
     'status': 'created',
     'message': f'Task {task_id} created'
@@ -269,7 +269,7 @@ def run_job():
     if running_at is None and info['status'] in ['running', 'completed']:
       info['running_at'] = running_at = info['time']
       write_start = True
-  
+
     if info['status'] in ['cancelled', 'completed']:
       result_file = result_file_name(session_id, gen, task_id, task_type)
       if info['status'] == 'completed' and len(errors) == 0:
@@ -325,9 +325,9 @@ def log_info(info, log_file_path, initial = False, suppress_exception = False):
 
 if __name__ == '__main__':
   import argparse
-  
+
   parser = argparse.ArgumentParser(description='Run a session task')
-  parser.add_argument('-p', '--log-path', help='path containing log file', required=True)
+  parser.add_argument('-p', '--log-dir', help='directory containing log file', required=True)
   parser.add_argument('-s', '--session-id', help='session id', required=True)
   parser.add_argument('-i', '--task-id', help='task id', required=True)
   parser.add_argument('-t', '--task-type', help='task type', required=True)

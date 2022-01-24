@@ -4,12 +4,15 @@ defmodule LogWatcher.Accounts.User do
 
   alias LogWatcher.Sessions.Session
 
+  @timestamps_opts [type: :utc_datetime]
   @primary_key {:id, Ecto.ULID, autogenerate: true}
   schema "users" do
     field :first_name, :string
     field :last_name, :string
 
     has_many :sessions, Session
+
+    timestamps()
   end
 
   @doc false

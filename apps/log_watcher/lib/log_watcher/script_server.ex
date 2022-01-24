@@ -45,7 +45,7 @@ defmodule LogWatcher.ScriptServer do
 
   @info_keys [
     :session_id,
-    :session_log_path,
+    :log_dir,
     :task_id,
     :task_type,
     :gen
@@ -61,9 +61,9 @@ defmodule LogWatcher.ScriptServer do
   @doc """
   Public interface. Launch and monitor a shell script.
   """
-  @spec run_script(String.t(), %{required(:task_id) => String.t()}) :: reference()
-  def run_script(script_path, start_args) do
-    GenServer.call(__MODULE__, {:run_script, script_path, start_args})
+  @spec run_script(String.t(), %{required(:task_id) => String.t()}, pid()) :: reference()
+  def run_script(script_path, start_args, listener) do
+    GenServer.call(__MODULE__, {:run_script, script_path, start_args, listener})
   end
 
   @doc """
@@ -132,12 +132,16 @@ defmodule LogWatcher.ScriptServer do
   @impl true
   @spec handle_call(term(), GenServer.from(), state()) ::
           {:reply, term(), state()} | {:noreply, state()}
-  def handle_call({:run_script, script_path, %{task_id: task_id} = start_args}, _from, state) do
+  def handle_call(
+        {:run_script, script_path, %{task_id: task_id} = start_args, listener},
+        _from,
+        state
+      ) do
     _ = Logger.info("ScriptServer run_script #{script_path}")
 
     task =
       Elixir.Task.Supervisor.async_nolink(LogWatcher.TaskSupervisor, fn ->
-        do_run_script(script_path, start_args)
+        do_run_script(script_path, start_args, listener)
       end)
 
     # After we start the task, we store its reference and the url it is fetching
@@ -278,18 +282,20 @@ defmodule LogWatcher.ScriptServer do
 
   @spec do_run_script(
           String.t(),
-          map()
+          map(),
+          pid()
         ) ::
           {:ok, map()} | {:error, term()}
   defp do_run_script(
          script_path,
          %{
-           session_log_path: session_log_path,
+           log_dir: log_dir,
            session_id: session_id,
            task_id: task_id,
            task_type: task_type,
            gen: gen
-         } = start_args
+         } = start_args,
+         listener
        ) do
     _ =
       Logger.info("ScriptServer task #{task_id} do_run_script start_args #{inspect(start_args)}")
@@ -313,8 +319,8 @@ defmodule LogWatcher.ScriptServer do
        |> Map.put(:status, "completed")}
     else
       basic_args = [
-        "--log-path",
-        session_log_path,
+        "--log-dir",
+        log_dir,
         "--session-id",
         session_id,
         "--task-id",
@@ -338,9 +344,7 @@ defmodule LogWatcher.ScriptServer do
 
       _ =
         Logger.info(
-          "ScriptServer task #{task_id} shelling out to #{executable} with args #{
-            inspect(script_args)
-          }"
+          "ScriptServer task #{task_id} shelling out to #{executable} with args #{inspect(script_args)}"
         )
 
       {output, exit_status} =
@@ -349,12 +353,12 @@ defmodule LogWatcher.ScriptServer do
       _ = Logger.info("ScriptServer task #{task_id} script exited with #{exit_status}")
       _ = Logger.info("ScriptServer task #{task_id} output from script: #{inspect(output)}")
 
-      parse_script_output(info, output, exit_status)
+      parse_script_output(info, output, exit_status, listener)
     end
   end
 
-  @spec parse_script_output(map(), String.t(), integer()) :: {:ok, map()}
-  defp parse_script_output(info, output, exit_status) do
+  @spec parse_script_output(map(), String.t(), integer(), pid()) :: {:ok, map()}
+  defp parse_script_output(info, output, exit_status, listener) do
     payload =
       case String.split(output, "\n") |> get_last_json_line() do
         nil ->
@@ -370,8 +374,7 @@ defmodule LogWatcher.ScriptServer do
           |> Map.put(:exit_status, exit_status)
       end
 
-    Session.events_topic(info.session_id)
-    |> Session.broadcast({:script_terminated, payload})
+    send(listener, {:script_terminated, payload})
 
     {:ok, payload}
   end

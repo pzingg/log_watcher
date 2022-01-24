@@ -7,12 +7,12 @@ defmodule LogWatcher.Repo.Migrations.CreateSessions do
       add :name, :string, null: false
       add :description, :string, null: false
       add :tag, :string, null: false
-      add :log_path, :string, null: false
+      add :log_dir, :string, null: false
       add :gen, :integer
       add :acked_event_id, :integer
       add :user_id, references(:users, type: :binary_id, on_delete: :nothing)
 
-      timestamps()
+      timestamps(type: :utc_datetime)
     end
 
     create index(:sessions, [:user_id])

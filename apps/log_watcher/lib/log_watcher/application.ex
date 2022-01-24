@@ -18,7 +18,8 @@ defmodule LogWatcher.Application do
       # Start the PubSub system
       {Phoenix.PubSub, name: LogWatcher.PubSub},
       # Run jobs via a PostgreSQL database
-      {Oban, oban_config()}
+      {Oban, oban_config()},
+      {LogWatcher.Pipeline, []}
       # Start a worker by calling: LogWatcher.Worker.start_link(arg)
       # {LogWatcher.Worker, arg}
     ]

@@ -12,7 +12,7 @@ defmodule LogWatcher.Tasks.Task do
   that reference the session:
 
   * `:session_id`
-  * `:session_log_path`
+  * `:log_dir`
 
   Each task has a few required metadata fields specific to an
   implementation for a particular software system:
@@ -34,7 +34,7 @@ defmodule LogWatcher.Tasks.Task do
     plugin(TypedStructEctoChangeset)
     field(:task_id, String.t(), enforce: true)
     field(:session_id, String.t(), enforce: true)
-    field(:session_log_path, String.t(), enforce: true)
+    field(:log_dir, String.t(), enforce: true)
     field(:log_prefix, String.t(), enforce: true)
     field(:task_type, String.t(), enforce: true)
     field(:gen, integer(), enforce: true)

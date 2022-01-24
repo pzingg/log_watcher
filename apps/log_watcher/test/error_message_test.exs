@@ -4,7 +4,7 @@ defmodule LogWatcher.ErrorMessageTest do
   test "raises an input error that includes a translated field" do
     assert_raise(
       LogWatcher.InputError,
-      "Errors creating session: Log path can't be blank.",
+      "Errors creating session: Log dir can't be blank.",
       fn ->
         LogWatcher.Sessions.create_session!("A name", "A description", "tag", "", 1)
       end

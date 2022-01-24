@@ -24,7 +24,7 @@ run_job <- function(args) {
   setup_logging(args)
 
   session_id <- args$session_id
-  session_log_path <- args$log_path
+  log_dir <- args$log_dir
   task_id <- args$task_id
   task_type <- args$task_type
   gen <- args$gen
@@ -45,7 +45,7 @@ run_job <- function(args) {
 
   set_script_status("reading")
   arg_file <- arg_file_name(session_id, gen, task_id, task_type)
-  arg_path <- file.path(session_log_path, arg_file)
+  arg_path <- file.path(log_dir, arg_file)
   if (identical(error, "reading")) {
     blowup_a()
   }
@@ -116,7 +116,14 @@ run_job <- function(args) {
     jcat(paste0("wrote line ", line_no, "\n"))
 
     if (write_result) {
-      break
+      if (identical(error, "forever")) {
+        jcat("running forever...\n")
+        while (1) {
+          Sys.sleep(sleep_time)
+        }
+      } else {
+        break
+      }
     }
   }
 }
@@ -136,7 +143,7 @@ blowup <- function() {
 create_task <- function(args) {
   res <- list(
     session_id = args$session_id,
-    session_log_path = args$log_path,
+    log_dir = args$log_dir,
     task_id = args$task_id,
     task_type = args$task_type,
     gen = args$gen,

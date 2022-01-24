@@ -43,10 +43,10 @@ defmodule LogWatcher.Tasks do
 
   @spec list_task_log_files(Session.t(), boolean()) :: [String.t()]
   def list_task_log_files(
-        %Session{id: session_id, log_path: session_log_path},
+        %Session{id: session_id, log_dir: log_dir},
         include_archived \\ false
       ) do
-    log_files_for_session(session_log_path, include_archived)
+    log_files_for_session(log_dir, include_archived)
     |> Enum.map(fn log_file_path ->
       params = parse_log_file_name(session_id, log_file_path)
 
@@ -63,16 +63,16 @@ defmodule LogWatcher.Tasks do
 
   @spec list_tasks(Session.t(), boolean()) :: [Task.t()]
   def list_tasks(
-        %Session{id: session_id, log_path: session_log_path},
+        %Session{id: session_id, log_dir: log_dir},
         include_archived \\ false
       ) do
-    log_files_for_session(session_log_path, include_archived)
+    log_files_for_session(log_dir, include_archived)
     |> Enum.map(&create_task_from_file!(session_id, &1))
   end
 
   @spec get_task(Session.t(), String.t()) :: Task.t() | nil
-  def get_task(%Session{id: session_id, log_path: session_log_path}, task_id) do
-    case log_files_for_task(session_log_path, task_id) do
+  def get_task(%Session{id: session_id, log_dir: log_dir}, task_id) do
+    case log_files_for_task(log_dir, task_id) do
       [] ->
         nil
 
@@ -95,8 +95,8 @@ defmodule LogWatcher.Tasks do
   end
 
   @spec archive_task(Session.t(), String.t()) :: [{String.t(), :ok | {:error, term()}}]
-  def archive_task(%Session{log_path: session_log_path}, task_id) do
-    log_files = log_files_for_task(session_log_path, task_id)
+  def archive_task(%Session{log_dir: log_dir}, task_id) do
+    log_files = log_files_for_task(log_dir, task_id)
 
     if Enum.empty?(log_files) do
       [{task_id, {:error, :not_found}}]
@@ -136,14 +136,14 @@ defmodule LogWatcher.Tasks do
   end
 
   @spec log_files_for_task(String.t(), String.t()) :: [String.t()]
-  defp log_files_for_task(session_log_path, task_id) do
-    Path.join(session_log_path, Task.log_file_glob(task_id))
+  defp log_files_for_task(log_dir, task_id) do
+    Path.join(log_dir, Task.log_file_glob(task_id))
     |> Path.wildcard()
   end
 
   @spec log_files_for_task(String.t(), boolean()) :: [String.t()]
-  defp log_files_for_session(session_log_path, include_archived) do
-    Path.join(session_log_path, all_task_log_file_glob(include_archived))
+  defp log_files_for_session(log_dir, include_archived) do
+    Path.join(log_dir, all_task_log_file_glob(include_archived))
     |> Path.wildcard()
   end
 
@@ -153,13 +153,13 @@ defmodule LogWatcher.Tasks do
 
   @spec parse_log_file_name(String.t(), String.t()) :: map()
   defp parse_log_file_name(session_id, log_file_path) do
-    session_log_path = Path.dirname(log_file_path)
+    log_dir = Path.dirname(log_file_path)
     log_file_name = Path.basename(log_file_path)
     is_archived = String.ends_with?(log_file_name, ".jsonx")
     log_prefix = Regex.replace(~r/-log\.json.?$/, log_file_name, "")
 
     with session_and_archive_params <- %{
-           "session_log_path" => session_log_path,
+           "log_dir" => log_dir,
            "log_file_name" => log_file_name,
            "log_file_path" => log_file_path,
            "log_prefix" => log_prefix,
@@ -191,7 +191,7 @@ defmodule LogWatcher.Tasks do
     fields = [
       :task_id,
       :session_id,
-      :session_log_path,
+      :log_dir,
       :log_prefix,
       :task_type,
       :gen,
@@ -206,16 +206,16 @@ defmodule LogWatcher.Tasks do
 
   @spec validate_singleton_task_log_file(Ecto.Changeset.t()) :: Ecto.Changeset.t()
   defp validate_singleton_task_log_file(changeset) do
-    session_log_path = Ecto.Changeset.get_change(changeset, :session_log_path)
+    log_dir = Ecto.Changeset.get_change(changeset, :log_dir)
     task_id = Ecto.Changeset.get_change(changeset, :task_id)
-    count = Enum.count(log_files_for_task(session_log_path, task_id))
+    count = Enum.count(log_files_for_task(log_dir, task_id))
 
     if count == 1 do
       changeset
     else
       changeset
       |> Ecto.Changeset.add_error(
-        :session_log_path,
+        :log_dir,
         "%{count} log files exist for #{task_id} in directory",
         count: count
       )
@@ -245,7 +245,7 @@ defmodule LogWatcher.Tasks do
   end
 
   @spec read_task_status(Task.t()) :: map()
-  defp read_task_status(%Task{session_log_path: session_log_path} = task) do
+  defp read_task_status(%Task{log_dir: log_dir} = task) do
     running_at =
       case read_start_info(task) do
         {:ok, info} ->
@@ -276,7 +276,7 @@ defmodule LogWatcher.Tasks do
       "errors" => errors
     }
 
-    log_file_path = Path.join(session_log_path, Task.log_file_name(task))
+    log_file_path = Path.join(log_dir, Task.log_file_name(task))
 
     File.stream!(log_file_path)
     |> Enum.into([])
@@ -308,20 +308,20 @@ defmodule LogWatcher.Tasks do
   end
 
   @spec read_arg_info(Task.t()) :: {:ok, term()} | {:error, term()}
-  defp read_arg_info(%Task{session_log_path: session_log_path} = task) do
-    Path.join(session_log_path, Task.arg_file_name(task))
+  defp read_arg_info(%Task{log_dir: log_dir} = task) do
+    Path.join(log_dir, Task.arg_file_name(task))
     |> read_json()
   end
 
   @spec read_start_info(Task.t()) :: {:ok, term()} | {:error, term()}
-  defp read_start_info(%Task{session_log_path: session_log_path} = task) do
-    Path.join(session_log_path, Task.start_file_name(task))
+  defp read_start_info(%Task{log_dir: log_dir} = task) do
+    Path.join(log_dir, Task.start_file_name(task))
     |> read_json()
   end
 
   @spec read_result_info(Task.t()) :: {:ok, term()} | {:error, term()}
-  defp read_result_info(%Task{session_log_path: session_log_path} = task) do
-    Path.join(session_log_path, Task.result_file_name(task))
+  defp read_result_info(%Task{log_dir: log_dir} = task) do
+    Path.join(log_dir, Task.result_file_name(task))
     |> read_json()
   end
 

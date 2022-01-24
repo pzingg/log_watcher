@@ -8,7 +8,7 @@ defmodule Translations.ErrorMessageTest do
       @typedoc "A test structure"
 
       plugin(TypedStructEctoChangeset)
-      field(:session_log_path, String.t(), enforce: true)
+      field(:log_dir, String.t(), enforce: true)
     end
 
     @spec new() :: t()
@@ -34,22 +34,22 @@ defmodule Translations.ErrorMessageTest do
   end
 
   test "humanizes a field name using gettext" do
-    text = Translations.humanize_field(:session_log_path)
+    text = Translations.humanize_field(:log_dir)
     assert text == "the log path"
   end
 
   test "translates an error message using gettext" do
     params = %{
-      "session_log_path" => "/log/path/must/be/less/than/twenty/characters"
+      "log_dir" => "/log/path/must/be/less/than/twenty/characters"
     }
 
-    fields = [:session_log_path]
+    fields = [:log_dir]
 
     {:error, changeset} =
       TestSession.new()
       |> Ecto.Changeset.cast(params, fields)
       |> Ecto.Changeset.validate_required(TestSession.required_fields(fields))
-      |> Ecto.Changeset.validate_length(:session_log_path, max: 20)
+      |> Ecto.Changeset.validate_length(:log_dir, max: 20)
       |> Ecto.Changeset.apply_action(:insert)
 
     messages = Translations.changeset_error_messages(changeset)

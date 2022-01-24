@@ -23,21 +23,23 @@ defmodule LogWatcher.TaskStarter do
   alias LogWatcher.Tasks.Task
 
   defmodule LoopInfo do
-    @enforce_keys [:expiry, :job_id, :task_id, :task_ref, :cancel]
+    @enforce_keys [:job_id, :task_id, :task_ref, :cancel, :script_timeout]
 
-    defstruct expiry: 0,
-              job_id: 0,
+    defstruct job_id: 0,
               task_id: nil,
               task_ref: nil,
               cancel: nil,
+              script_timeout: 0,
+              expiry: 0,
               sent_os_pid: false
 
     @type t() :: %__MODULE__{
-            expiry: integer(),
             job_id: integer(),
             task_id: String.t(),
             task_ref: reference(),
             cancel: String.t(),
+            script_timeout: integer(),
+            expiry: integer(),
             sent_os_pid: boolean()
           }
   end
@@ -70,7 +72,7 @@ defmodule LogWatcher.TaskStarter do
           "session_id" => session_id,
           "name" => name,
           "description" => description,
-          "session_log_path" => session_log_path,
+          "log_dir" => log_dir,
           "gen" => gen_arg,
           "task_id" => task_id,
           "task_type" => task_type,
@@ -78,15 +80,16 @@ defmodule LogWatcher.TaskStarter do
         }
       }) do
     _ = Process.flag(:trap_exit, true)
-    _ = Logger.error("perform job #{job_id} task_id #{task_id}")
-    _ = Logger.error("worker pid is #{inspect(self())}")
 
-    gen =
+    _gen =
       if is_binary(gen_arg) do
         String.to_integer(gen_arg)
       else
         gen_arg
       end
+
+    _ = Logger.error("perform job #{job_id} task_id #{task_id}")
+    _ = Logger.error("worker pid is #{inspect(self())}")
 
     session = Sessions.get_session!(session_id)
     watch_and_run(session, task_id, task_type, Map.put(task_args, "oban_job_id", job_id))
@@ -100,12 +103,23 @@ defmodule LogWatcher.TaskStarter do
   @default_script_timeout 120_000
 
   @doc """
+  Start the file watcher, run the script, and receive messages.
   Note: task_args must have string keys!
   """
   @spec watch_and_run(Session.t(), String.t(), String.t(), map()) ::
           {:ok, term()} | {:discard, term()}
-  def watch_and_run(
-        %Session{id: session_id, log_path: session_log_path, gen: gen},
+  def watch_and_run(session, task_id, task_type, task_args) do
+    loop_info = start_watcher_and_script(session, task_id, task_type, task_args)
+    run_loop(loop_info)
+  end
+
+  @doc """
+  Just start the file watcher and run the script, but don't receive any messages.
+  Used for observing the supervision tree.
+  """
+  @spec start_watcher_and_script(Session.t(), String.t(), String.t(), map()) :: LoopInfo.t()
+  def start_watcher_and_script(
+        %Session{id: session_id, log_dir: log_dir, gen: gen},
         task_id,
         task_type,
         task_args
@@ -125,12 +139,10 @@ defmodule LogWatcher.TaskStarter do
         "task #{task_id}: job_id #{job_id}, cancel #{cancel}, pid is #{inspect(self())}"
       )
 
-    _ = Logger.info("task #{task_id}: start watching #{log_file} in #{session_log_path}")
-
-    :ok = Session.events_topic(session_id) |> Session.subscribe()
+    _ = Logger.info("task #{task_id}: start watching #{log_file} in #{log_dir}")
 
     {:ok, watcher_pid} =
-      FileWatcherSupervisor.start_child_and_watch_file(session_id, session_log_path, log_file)
+      FileWatcherSupervisor.start_child_and_watch_file(session_id, log_dir, log_file)
 
     _ = Logger.info("task #{task_id}: watcher is #{inspect(watcher_pid)}")
 
@@ -138,7 +150,7 @@ defmodule LogWatcher.TaskStarter do
     start_args =
       Map.merge(task_args, %{
         "session_id" => session_id,
-        "session_log_path" => session_log_path,
+        "log_dir" => log_dir,
         "task_id" => task_id,
         "task_type" => task_type,
         "gen" => gen
@@ -146,8 +158,7 @@ defmodule LogWatcher.TaskStarter do
       |> Map.put_new("num_lines", 10)
       |> json_encode_decode(:atoms)
 
-    arg_path =
-      Path.join(session_log_path, Task.arg_file_name(session_id, gen, task_id, task_type))
+    arg_path = Path.join(log_dir, Task.arg_file_name(session_id, gen, task_id, task_type))
 
     _ = Logger.info("task #{task_id}: write arg file to #{arg_path}")
 
@@ -157,21 +168,27 @@ defmodule LogWatcher.TaskStarter do
     script_path = Path.join([:code.priv_dir(:log_watcher), "mock_task", script_file])
     _ = Logger.info("task #{task_id}: run script at #{script_path}")
 
-    task_ref = ScriptServer.run_script(script_path, start_args)
+    task_ref = ScriptServer.run_script(script_path, start_args, self())
 
-    # Process incoming messages to find a result
     _ = Logger.info("task #{task_id}: script task ref is #{inspect(task_ref)}")
-    _ = Logger.error("task #{task_id}: starting loop")
 
-    task_info = %LoopInfo{
-      expiry: System.monotonic_time(:millisecond) + script_timeout,
+    %LoopInfo{
+      script_timeout: script_timeout,
       job_id: job_id,
       task_id: task_id,
       task_ref: task_ref,
       cancel: cancel
     }
+  end
 
-    result = loop(task_info)
+  @doc """
+  Process incoming messages to find a result.
+  """
+  @spec run_loop(LoopInfo.t()) :: {:ok, term()} | {:discard, term()}
+  def run_loop(%LoopInfo{task_id: task_id, script_timeout: timeout} = info) do
+    _ = Logger.error("task #{task_id}: starting loop")
+
+    result = loop(%LoopInfo{info | expiry: System.monotonic_time(:millisecond) + timeout})
 
     # Return disposition for Oban
     _ = Logger.error("task #{task_id}: exited loop, result is #{inspect(result)}")
@@ -239,8 +256,8 @@ defmodule LogWatcher.TaskStarter do
     time_left = max(0, expiry - time_now)
 
     receive do
-      {:task_started, file_name, info} ->
-        _ = Logger.info("task #{task_id}, loop received :task_started on #{file_name}")
+      {:task_started, info} ->
+        _ = Logger.info("task #{task_id}, loop received :task_started on #{info[:file_name]}")
         result = Map.merge(info, %{task_ref: task_ref})
         _ = Logger.info("task #{task_id}, loop returning :ok #{inspect(result)}")
         {:ok, result}
@@ -261,8 +278,11 @@ defmodule LogWatcher.TaskStarter do
         _ = Logger.info("task #{task_id}, loop returning :script_crashed")
         {:error, {:script_crashed, reason}}
 
-      {:task_updated, file_name, update_info} ->
-        _ = Logger.info("task #{task_id}, loop received :task_updated on #{file_name}")
+      {:task_updated, update_info} ->
+        _ =
+          Logger.info(
+            "task #{task_id}, loop received :task_updated on #{update_info[:file_name]}"
+          )
 
         next_info =
           info
@@ -271,6 +291,11 @@ defmodule LogWatcher.TaskStarter do
 
         _ = Logger.info("task #{task_id}: re-entering loop")
         loop(next_info)
+
+      {:task_completed, info} ->
+        _ = Logger.info("task #{task_id}, loop received :task_completed on #{info[:file_name]}")
+        _ = Logger.info("task #{task_id}: re-entering loop")
+        loop(info)
 
       {:EXIT, pid, reason} ->
         _ = Logger.error("task #{task_id}, loop received :EXIT #{reason}")

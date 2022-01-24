@@ -6,25 +6,27 @@ defmodule LogWatcher.Sessions do
   require Logger
 
   alias LogWatcher.Repo
-  alias LogWatcher.Sessions.Session
+  alias LogWatcher.Sessions.{Event, Session}
+
+  # Sessions
 
   @doc """
   Create a Session struct object from an id and path.
   """
   @spec create_session!(String.t(), String.t(), String.t(), String.t(), integer()) :: Session.t()
-  def create_session!(name, description, tag, log_path, gen) do
-    create_session(name, description, tag, log_path, gen)
+  def create_session!(name, description, tag, log_dir, gen) do
+    create_session(name, description, tag, log_dir, gen)
     |> LogWatcher.maybe_raise_input_error("Errors creating session", :id)
   end
 
   @spec create_session(String.t(), String.t(), String.t(), String.t(), integer()) ::
           {:ok, Session.t()} | {:error, term()}
-  def create_session(name, description, tag, log_path, gen) do
+  def create_session(name, description, tag, log_dir, gen) do
     attrs = %{
       "name" => name,
       "description" => description,
       "tag" => tag,
-      "log_path" => log_path,
+      "log_dir" => log_dir,
       "gen" => gen
     }
 
@@ -53,14 +55,21 @@ defmodule LogWatcher.Sessions do
     |> Ecto.Changeset.apply_action(:update)
   end
 
+  # Events
+
+  def create_event_from_log_watcher(attrs) do
+    Event.log_watcher_changeset(%Event{}, attrs)
+    |> Repo.insert()
+  end
+
   # Private functions
 
   defp multi_create_session(attrs) do
     Ecto.Multi.new()
     |> Ecto.Multi.insert(:session, Session.changeset(%Session{}, attrs))
     |> Ecto.Multi.run(:validate_path, fn _repo, %{session: session} ->
-      if File.dir?(session.log_path) do
-        {:ok, session.log_path}
+      if File.dir?(session.log_dir) do
+        {:ok, session.log_dir}
       else
         {:error, :enoent}
       end

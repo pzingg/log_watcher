@@ -9,7 +9,7 @@ source("json_logging.R")
 #' and sets up R session options used by the logging system.
 #'
 #' @return A named list with these components:
-#'  \code{log_path} The directory for argument and log files on the file system.
+#'  \code{log_dir} The directory for argument and log files on the file system.
 #'  \code{session_id} The session ID.
 #'  \code{task_id} The task (command) ID.
 #'  \code{task_type} The task type.
@@ -33,7 +33,7 @@ start_script <- function() {
   p <- argparser::arg_parser("daptics rscript")
 
   # Add command line arguments. If not specified, missing args default to NA.
-  p <- argparser::add_argument(p, "--log-path", "path containing log file", short = "p")
+  p <- argparser::add_argument(p, "--log-dir", "directory containing log file", short = "p")
   p <- argparser::add_argument(p, "--session-id", "session id", short = "s")
   p <- argparser::add_argument(p, "--task-id", "task id", short = "i")
   p <- argparser::add_argument(p, "--task-type", "task id", short = "t")
@@ -54,7 +54,7 @@ start_script <- function() {
     jcat("parsed script args\n")
   }
 
-  stopifnot(length(args$log_path) == 1)
+  stopifnot(length(args$log_dir) == 1)
   stopifnot(length(args$session_id) == 1)
   stopifnot(length(args$task_id) == 1)
   stopifnot(length(args$task_type) == 1)
@@ -63,7 +63,7 @@ start_script <- function() {
   # Save session and task data in R options
   context <- list(
     daptics_script_name = basename(pa$script),
-    daptics_session_log_path = args$log_path,
+    daptics_log_dir = args$log_dir,
     daptics_session_id = args$session_id,
     daptics_task_id = args$task_id,
     daptics_task_type = args$task_type,

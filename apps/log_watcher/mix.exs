@@ -48,6 +48,8 @@ defmodule LogWatcher.MixProject do
       {:ecto_ulid, "~> 0.3"},
       {:faker, "~> 0.16", only: [:dev, :test]},
       {:file_system, "~> 0.2"},
+      {:gen_stage, "~> 1.1"},
+      {:broadway, "~> 1.0"},
       {:gproc, "~> 0.9"},
       {:jason, "~> 1.2"},
       {:oban, "~> 2.7"},
