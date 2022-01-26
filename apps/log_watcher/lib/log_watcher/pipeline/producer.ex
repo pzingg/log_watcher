@@ -13,8 +13,9 @@ defmodule LogWatcher.Pipeline.Producer do
   @doc """
   State is not used.
   """
-  def init(_arg) do
-    {:producer, :ok}
+  def init(opts) do
+    _ = Logger.error("Producer init #{inspect(opts)}")
+    {:producer, %{draining: false, test_pid: Keyword.get(opts, :test_pid)}}
   end
 
   @impl true
@@ -22,7 +23,11 @@ defmodule LogWatcher.Pipeline.Producer do
   Dispatch event immediately (using GenStage built-in buffering if necessary).
   """
   def handle_call({:notify, event}, _from, state) do
-    {:reply, :ok, [event], state}
+    if state.draining do
+      {:reply, :ok, [], state}
+    else
+      {:reply, :ok, [event], state}
+    end
   end
 
   @impl true
@@ -31,5 +36,14 @@ defmodule LogWatcher.Pipeline.Producer do
   """
   def handle_demand(_demand, state) do
     {:noreply, [], state}
+  end
+
+  @doc false
+  def prepare_for_draining(%{test_pid: test_pid} = state) do
+    if !is_nil(test_pid) && Process.alive?(test_pid) do
+      _ = send(test_pid, :broadway_exit)
+    end
+
+    {:noreply, [], %{state | draining: true, test_pid: nil}}
   end
 end

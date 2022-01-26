@@ -35,7 +35,7 @@ defmodule Translations.ErrorMessageTest do
 
   test "humanizes a field name using gettext" do
     text = Translations.humanize_field(:log_dir)
-    assert text == "the log path"
+    assert text == "the log directory"
   end
 
   test "translates an error message using gettext" do
@@ -54,6 +54,6 @@ defmodule Translations.ErrorMessageTest do
 
     messages = Translations.changeset_error_messages(changeset)
     first_message = messages |> hd |> hd
-    assert first_message == "The log path should be at most 20 character(s)."
+    assert first_message == "The log directory should be at most 20 character(s)."
   end
 end

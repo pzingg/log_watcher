@@ -11,7 +11,7 @@ defmodule LogWatcher.Application do
       LogWatcher.Repo,
       # Supervise file watches
       {LogWatcher.FileWatcherSupervisor, name: LogWatcher.FileWatcherSupervisor},
-      # Monitor long running scripts via Elixir Tasks.
+      # Monitor long running scripts via Elixir Commands.
       {Task.Supervisor, name: LogWatcher.TaskSupervisor},
       # Run scripts
       {LogWatcher.ScriptServer, name: LogWatcher.ScriptServer},
@@ -19,6 +19,7 @@ defmodule LogWatcher.Application do
       {Phoenix.PubSub, name: LogWatcher.PubSub},
       # Run jobs via a PostgreSQL database
       {Oban, oban_config()},
+      # Pipeline will be restarted for each test.
       {LogWatcher.Pipeline, []}
       # Start a worker by calling: LogWatcher.Worker.start_link(arg)
       # {LogWatcher.Worker, arg}

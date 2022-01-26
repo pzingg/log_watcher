@@ -2,8 +2,7 @@ defmodule LogWatcher.ObanTest do
   use LogWatcher.DataCase, async: false
   use Oban.Testing, repo: LogWatcher.Repo
 
-  alias LogWatcher.{ScriptServer, Tasks, TaskStarter}
-  alias LogWatcher.Tasks.Session
+  alias LogWatcher.{Commands, CommandJob, ScriptServer}
 
   require Logger
 
@@ -11,79 +10,94 @@ defmodule LogWatcher.ObanTest do
   @script_timeout 30_000
 
   @tag :start_oban
-  @tag :start_oban
-  test "02 runs a task using Oban.Testing perform_job", context do
-    %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
-      LogWatcher.mock_task_args(to_string(context.test), script_file: "mock_task.R")
+  test "01 runs a command using Oban.Testing perform_job", context do
+    %{
+      session: session,
+      command_id: command_id,
+      command_name: command_name,
+      command_args: command_args
+    } = LogWatcher.mock_command_args(to_string(context.test), script_file: "mock_command.R")
 
-    _ = Tasks.archive_session_tasks(session)
+    _ = Commands.archive_session_commands(session)
 
     args = %{
       session_id: session.id,
-      name: session.name,
+      session_name: session.name,
       description: session.description,
       tag: session.tag,
       log_dir: session.log_dir,
       gen: session.gen,
-      task_id: task_id,
-      task_type: task_type,
-      task_args: task_args
+      command_id: command_id,
+      command_name: command_name,
+      command_args: command_args
     }
 
-    start_result = perform_job(LogWatcher.TaskStarter, args)
-    task_ref = assert_script_started(start_result, task_id)
+    start_result = perform_job(LogWatcher.CommandJob, args)
+    task_ref = assert_script_started(start_result, command_id)
 
     {:ok, _} = await_task(task_ref, @script_timeout)
+
+    _ = await_pipeline()
   end
 
   @tag :start_oban
   test "02 queues and runs an Oban job", context do
-    %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
-      LogWatcher.mock_task_args(to_string(context.test), script_file: "mock_task.R")
+    %{
+      session: session,
+      command_id: command_id,
+      command_name: command_name,
+      command_args: command_args
+    } = LogWatcher.mock_command_args(to_string(context.test), script_file: "mock_command.R")
 
-    _ = Tasks.archive_session_tasks(session)
+    _ = Commands.archive_session_commands(session)
 
-    %{failure: 0, success: 0} = Oban.drain_queue(queue: :tasks)
+    %{failure: 0, success: 0} = Oban.drain_queue(CommandJob.queue_opts())
 
-    {:ok, %Oban.Job{id: job_id, queue: "tasks", state: state}} =
-      TaskStarter.insert_job(session, task_id, task_type, task_args)
+    {:ok, %Oban.Job{id: job_id, queue: queue, state: state}} =
+      CommandJob.insert(session, command_id, command_name, command_args)
 
-    _ = Logger.error("inserted new job #{job_id}, state #{state}")
+    _ = Logger.error("inserted new job #{job_id} on queue #{queue}, state #{state}")
 
     match_args = %{
       session_id: session.id,
-      name: session.name,
+      session_name: session.name,
       description: session.description,
       tag: session.tag,
       log_dir: session.log_dir,
       gen: session.gen,
-      task_id: task_id,
-      task_type: task_type,
-      task_args: task_args
+      command_id: command_id,
+      command_name: command_name,
+      command_args: command_args
     }
 
-    assert_enqueued(worker: TaskStarter, args: match_args)
+    assert_enqueued(worker: CommandJob, args: match_args)
 
     expiry = System.monotonic_time(:millisecond) + @oban_exec_timeout
     {:ok, info} = await_job_state(job_id, :executing, expiry)
     assert Enum.member?(info.running, job_id)
 
     {:ok, _} = await_task(job_id, @script_timeout)
-    info = Oban.check_queue(queue: :tasks)
+    info = Oban.check_queue(CommandJob.queue_opts())
     assert Enum.empty?(info.running)
+
+    _ = await_pipeline()
   end
 
   @tag :start_oban
   test "03 queues, runs and cancels an Oban job", context do
-    %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
-      LogWatcher.mock_task_args(to_string(context.test), script_file: "mock_task.R")
+    %{
+      session: session,
+      command_id: command_id,
+      command_name: command_name,
+      command_args: command_args
+    } = LogWatcher.mock_command_args(to_string(context.test), script_file: "mock_command.R")
 
-    _ = Tasks.archive_session_tasks(session)
+    _ = Commands.archive_session_commands(session)
 
-    {:ok, %Oban.Job{id: job_id, queue: "tasks", state: state}} =
-      TaskStarter.insert_job(session, task_id, task_type, task_args)
+    {:ok, %Oban.Job{id: job_id, queue: queue, state: state}} =
+      CommandJob.insert(session, command_id, command_name, command_args)
 
-    _ = Logger.error("inserted new job #{job_id}, state #{state}")
+    _ = Logger.error("inserted new job #{job_id} on queue #{queue}, state #{state}")
 
     expiry = System.monotonic_time(:millisecond) + @oban_exec_timeout
     {:ok, info} = await_job_state(job_id, :executing, expiry)
@@ -98,8 +112,10 @@ defmodule LogWatcher.ObanTest do
     assert Enum.member?(info.running, job_id)
 
     {:ok, _} = await_task(job_id, @script_timeout)
-    info = Oban.check_queue(queue: :tasks)
+    info = Oban.check_queue(CommandJob.queue_opts())
     assert Enum.empty?(info.running)
+
+    _ = await_pipeline()
   end
 
   @spec await_job_state(String.t(), atom(), integer()) ::
@@ -107,12 +123,11 @@ defmodule LogWatcher.ObanTest do
   defp await_job_state(job_id, wait_for_state, expiry) do
     time_now = System.monotonic_time(:millisecond)
 
-    %Oban.Job{state: state_str, queue: "tasks"} = LogWatcher.Repo.get!(Oban.Job, job_id)
-
+    %Oban.Job{state: state_str} = LogWatcher.Repo.get!(Oban.Job, job_id)
     state = String.to_atom(state_str)
 
     if state == wait_for_state do
-      {:ok, Oban.check_queue(queue: :tasks)}
+      {:ok, Oban.check_queue(CommandJob.queue_opts())}
     else
       if time_now <= expiry do
         case state do

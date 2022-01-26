@@ -29,9 +29,11 @@ defmodule LogWatcher.Pipeline.Handler do
   A transformer function that Wraps LogWatcher events into Broadway.Messages,
   """
   def transform_event(event, opts \\ []) do
+    metadata = Keyword.get(opts, :metadata, %{})
+
     %Broadway.Message{
       data: event,
-      metadata: Keyword.get(opts, :metadata, %{}),
+      metadata: metadata,
       acknowledger: {Broadway.NoopAcknowledger, nil, nil}
     }
   end

@@ -52,30 +52,11 @@ defmodule LogWatcher.Sessions.Session do
   end
 
   ## PubSub utilities
-  @spec events_topic(String.t() | t()) :: String.t()
-  def events_topic(session_id) when is_binary(session_id) do
-    "session:#{session_id}"
-  end
-
-  def events_topic(%__MODULE__{id: session_id}) do
-    "session:#{session_id}"
-  end
 
   @spec subscribe(String.t()) :: :ok | {:error, term()}
   def subscribe(topic) do
     _ = Logger.info("#{inspect(self())} subscribing to #{topic}")
     Phoenix.PubSub.subscribe(LogWatcher.PubSub, topic)
-  end
-
-  @spec broadcast(String.t(), term()) :: :ok | {:error, term()}
-  def broadcast(topic, {event_type, data} = message) do
-    LogWatcher.Pipeline.Handler.sync_notify(%{event_type: event_type, topic: topic, data: data})
-    :ok
-  end
-
-  def broadcast(topic, message) do
-    Logger.error("broadcast error: topic #{topic} message is not a 2-tuple: #{inspect(message)}")
-    {:error, :bad_message}
   end
 
   @spec write_event(t(), atom(), Keyword.t()) :: {:ok, t()} | {:error, term()}

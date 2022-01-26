@@ -1,31 +1,32 @@
 defmodule LogWatcher.TypedStructTest do
   use LogWatcher.DataCase
 
-  alias LogWatcher.Tasks.Task
+  alias LogWatcher.Commands.Command
 
   test "03 task new" do
-    task = Task.new()
+    task = Command.new()
 
-    assert is_nil(task.task_id)
+    assert is_nil(task.command_id)
   end
 
   test "04 task ecto types" do
-    assert Enum.sort(Task.required_fields()) == [
+    assert Enum.sort(Command.required_fields()) == [
              :archived?,
+             :command_id,
              :created_at,
              :gen,
              :log_dir,
              :log_prefix,
+             :name,
              :os_pid,
              :session_id,
              :status,
-             :task_id,
-             :task_type,
              :updated_at
            ]
 
-    assert Enum.sort(Task.all_fields()) == [
+    assert Enum.sort(Command.all_fields()) == [
              :archived?,
+             :command_id,
              :completed_at,
              :created_at,
              :errors,
@@ -33,6 +34,7 @@ defmodule LogWatcher.TypedStructTest do
              :last_message,
              :log_dir,
              :log_prefix,
+             :name,
              :os_pid,
              :progress_counter,
              :progress_phase,
@@ -41,13 +43,12 @@ defmodule LogWatcher.TypedStructTest do
              :running_at,
              :session_id,
              :status,
-             :task_id,
-             :task_type,
              :updated_at
            ]
 
-    assert Enum.sort(Task.changeset_types()) == [
+    assert Enum.sort(Command.changeset_types()) == [
              {:archived?, :boolean},
+             {:command_id, :string},
              {:completed_at, :naive_datetime},
              {:created_at, :naive_datetime},
              {:errors, {:array, :map}},
@@ -55,6 +56,7 @@ defmodule LogWatcher.TypedStructTest do
              {:last_message, :string},
              {:log_dir, :string},
              {:log_prefix, :string},
+             {:name, :string},
              {:os_pid, :integer},
              {:progress_counter, :integer},
              {:progress_phase, :string},
@@ -63,8 +65,6 @@ defmodule LogWatcher.TypedStructTest do
              {:running_at, :naive_datetime},
              {:session_id, :string},
              {:status, :string},
-             {:task_id, :string},
-             {:task_type, :string},
              {:updated_at, :naive_datetime}
            ]
   end

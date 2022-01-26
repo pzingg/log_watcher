@@ -21,13 +21,13 @@ defmodule LogWatcher.FileWatcher do
   "cancelled" or "completed". If the `:status` item is missing,
   it will be set to "undefined".
 
-  A `:task_updated` message is sent for each line successfully parsed
+  A `:command_updated` message is sent for each line successfully parsed
   from the file being watched.
 
-  A `:task_started` message is sent for the first line that has a
+  A `:command_started` message is sent for the first line that has a
   status of "running", "cancelled" or "completed".
 
-  A `:task_completed` message is sent for each line that has a status
+  A `:command_completed` message is sent for each line that has a status
   of "cancelled" or "completed", but this is expected to happen
   at most one time.
 
@@ -38,6 +38,8 @@ defmodule LogWatcher.FileWatcher do
   use GenServer
 
   require Logger
+
+  alias LogWatcher.CommandStarter
 
   defmodule WatchedFile do
     @enforce_keys [:listener, :stream]
@@ -90,9 +92,9 @@ defmodule LogWatcher.FileWatcher do
 
   @type gproc_key :: {:n, :l, {:session_id, String.t()}}
 
-  @task_started_status ["running", "cancelled", "completed"]
+  @command_started_status ["running", "cancelled", "completed"]
 
-  @task_completed_status ["cancelled", "completed"]
+  @command_completed_status ["cancelled", "completed"]
 
   @doc """
   Public interface. Start the GenServer for a session.
@@ -181,15 +183,15 @@ defmodule LogWatcher.FileWatcher do
   end
 
   # events: {#PID<0.319.0>,
-  # "priv/mock_task/output/T10-create-003-log.jsonl",
+  # "priv/mock_command/output/T10-create-003-log.jsonl",
   # [:created]}
 
   # events: {#PID<0.319.0>,
-  # "priv/mock_task/output/T10-create-003-log.jsonl",
+  # "priv/mock_command/output/T10-create-003-log.jsonl",
   # [:modified]}
 
   # events: {#PID<0.319.0>,
-  # "priv/mock_task/output/T10-create-003-log.jsonl",
+  # "priv/mock_command/output/T10-create-003-log.jsonl",
   # [:modified, :closed]}
 
   @doc false
@@ -362,18 +364,20 @@ defmodule LogWatcher.FileWatcher do
           |> Map.put_new(:status, "undefined")
           |> Map.put_new(:file_name, file_name)
 
-        send(listener, {:task_updated, info})
+        _ = CommandStarter.send_event(listener, :command_updated, info)
 
+        # :command_started is only sent after we have validated.
+        # It will cause the CommandStarter to exit the message loop and return.
         next_file =
-          if !start_sent && Enum.member?(@task_started_status, info.status) do
-            send(listener, {:task_started, info})
+          if !start_sent && Enum.member?(@command_started_status, info.status) do
+            _ = CommandStarter.send_event(listener, :command_started, info)
             %WatchedFile{file | start_sent: true}
           else
             file
           end
 
-        if Enum.member?(@task_completed_status, info.status) do
-          send(listener, {:task_completed, info})
+        if Enum.member?(@command_completed_status, info.status) do
+          _ = CommandStarter.send_event(listener, :command_completed, info)
         end
 
         next_file

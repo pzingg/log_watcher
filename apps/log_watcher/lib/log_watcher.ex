@@ -9,7 +9,7 @@ defmodule LogWatcher do
   Collection of utilities in this module.
   """
 
-  alias LogWatcher.{Sessions, Tasks, TaskStarter}
+  alias LogWatcher.{Commands, CommandStarter, Sessions}
 
   ## General utilities
 
@@ -60,27 +60,31 @@ defmodule LogWatcher do
   def maybe_raise_input_error({:ok, data}, _label, _id_field), do: data
 
   @doc """
-  Create a random LogWatcher session and task, and run the task.
+  Create a random LogWatcher session and command, and run the command.
   Useful for observing the supervision tree (Hint: use `num_lines: 200`
-  to generate a longer running task).
+  to generate a longer running command).
   """
-  @spec run_mock_task(String.t(), Keyword.t()) :: {:ok, term()} | {:discard, term()}
-  def run_mock_task(description, opts \\ []) do
-    %{session: session, task_id: task_id, task_type: task_type, task_args: mock_task_args} =
-      mock_task_args(description, script_file: "mock_task.R")
+  @spec run_mock_command(String.t(), Keyword.t()) :: {:ok, term()} | {:discard, term()}
+  def run_mock_command(description, opts \\ []) do
+    %{
+      session: session,
+      command_id: command_id,
+      command_name: command_name,
+      command_args: mock_command_args
+    } = mock_command_args(description, script_file: "mock_command.R")
 
-    task_args =
-      Enum.reduce(opts, mock_task_args, fn {key, value}, acc ->
+    command_args =
+      Enum.reduce(opts, mock_command_args, fn {key, value}, acc ->
         Map.put(acc, to_string(key), value)
       end)
 
-    _ = Tasks.archive_session_tasks(session)
+    _ = Commands.archive_session_commands(session)
 
-    TaskStarter.watch_and_run(session, task_id, task_type, task_args)
+    CommandStarter.watch_and_run(session, command_id, command_name, command_args)
   end
 
-  def mock_task_base_dir() do
-    Path.join([:code.priv_dir(:log_watcher), "mock_task", "sessions"])
+  def mock_command_base_dir() do
+    Path.join([:code.priv_dir(:log_watcher), "mock_command", "sessions"])
   end
 
   defp mock_tag() do
@@ -88,23 +92,23 @@ defmodule LogWatcher do
   end
 
   @doc """
-  Create random arguments for a session and task.
+  Create random arguments for a session and command.
   """
-  @spec mock_task_args(String.t(), Keyword.t()) :: map()
-  def mock_task_args(description, opts) do
+  @spec mock_command_args(String.t(), Keyword.t()) :: map()
+  def mock_command_args(description, opts) do
     tag = mock_tag()
-    log_dir = Path.join([mock_task_base_dir(), tag, "output"])
+    log_dir = Path.join([mock_command_base_dir(), tag, "output"])
     File.mkdir_p(log_dir)
     gen = :rand.uniform(10) - 1
-    name = to_string(description) |> String.slice(0..10) |> String.trim()
-    session = Sessions.create_session!(name, description, tag, log_dir, gen)
+    session_name = to_string(description) |> String.slice(0..10) |> String.trim()
+    session = Sessions.create_session!(session_name, description, tag, log_dir, gen)
 
     %{
       session: session,
-      task_id: Faker.Util.format("T%4d"),
-      task_type: Faker.Util.pick(["create", "update", "generate", "analytics"]),
-      task_args: %{
-        "script_file" => Keyword.get(opts, :script_file, "mock_task.R"),
+      command_id: Faker.Util.format("CMD%4d"),
+      command_name: Faker.Util.pick(["create", "update", "generate", "analytics"]),
+      command_args: %{
+        "script_file" => Keyword.get(opts, :script_file, "mock_command.R"),
         "error" => Keyword.get(opts, :error, ""),
         "cancel" => Keyword.get(opts, :cancel, false),
         "num_lines" => :rand.uniform(6) + 6,
@@ -116,12 +120,17 @@ defmodule LogWatcher do
   @doc """
   Run a script forever, so we can observe the supervision tree.
   """
-  def run_mock_task_forever() do
-    %{session: session, task_id: task_id, task_type: task_type, task_args: task_args} =
-      LogWatcher.mock_task_args("Run forever", script_file: "mock_task.R", error: "forever")
+  def run_mock_command_forever() do
+    %{
+      session: session,
+      command_id: command_id,
+      command_name: command_name,
+      command_args: command_args
+    } = mock_command_args("Run forever", script_file: "mock_command.R", error: "forever")
 
-    _ = Tasks.archive_session_tasks(session)
+    _ = Commands.archive_session_commands(session)
 
-    _loop_info = TaskStarter.start_watcher_and_script(session, task_id, task_type, task_args)
+    _loop_info =
+      CommandStarter.start_watcher_and_script(session, command_id, command_name, command_args)
   end
 end

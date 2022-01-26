@@ -17,11 +17,11 @@ defmodule LogWatcher.FileWatcherSupervisor do
   supervision, and watch a log file.
   """
   @spec start_child_and_watch_file(String.t(), String.t(), String.t()) ::
-          :ignore | {:ok, pid()} | {:error, term()}
+          :ignore | {:ok, pid(), String.t()} | {:error, term()}
   def start_child_and_watch_file(session_id, log_dir, log_file) do
     with {:ok, pid} <- start_child(session_id, log_dir),
-         {:ok, _file} <- FileWatcher.add_watch(session_id, log_file, self()) do
-      {:ok, pid}
+         {:ok, file_name} <- FileWatcher.add_watch(session_id, log_file, self()) do
+      {:ok, pid, file_name}
     end
   end
 

@@ -1,42 +1,42 @@
-defmodule LogWatcher.Tasks.Task do
+defmodule LogWatcher.Commands.Command do
   @moduledoc """
-  Defines a Task struct for use with schemaless changesets.
-  Tasks are not stored in a SQL database. Task states are stored and
+  Defines a Command struct for use with schemaless changesets.
+  Tasks are not stored in a SQL database. Command states are stored and
   maintained in JSON-encoded files.
 
-  Each task has a unique ID, the `:task_id` (usually a UUID or ULID).
+  Each command has a unique ID, the `:command_id` (usually a UUID or ULID).
 
-  A task is perfomed in the context of a session, that is
-  the scripts and data files for the task are located in the session
+  A command is perfomed in the context of a session, that is
+  the scripts and data files for the command are located in the session
   directory on the file system, and so also has these fields
   that reference the session:
 
   * `:session_id`
   * `:log_dir`
 
-  Each task has a few required metadata fields specific to an
+  Each command has a few required metadata fields specific to an
   implementation for a particular software system:
 
-  * `:task_type` - A string identifying the category of this
-    task.
+  * `:command_name` - A string identifying the category of this
+    command.
   * `:gen` - An integer used to identify the particular
-    invocation of the task.
+    invocation of the command.
 
-  The other task fields are updated by reading the log files
-  produced by the task.
+  The other command fields are updated by reading the log files
+  produced by the command.
   """
 
   use TypedStruct
 
   typedstruct do
-    @typedoc "A daptics task constructed from log files"
+    @typedoc "A daptics command constructed from log files"
 
     plugin(TypedStructEctoChangeset)
-    field(:task_id, String.t(), enforce: true)
+    field(:command_id, String.t(), enforce: true)
     field(:session_id, String.t(), enforce: true)
     field(:log_dir, String.t(), enforce: true)
     field(:log_prefix, String.t(), enforce: true)
-    field(:task_type, String.t(), enforce: true)
+    field(:command_name, String.t(), enforce: true)
     field(:gen, integer(), enforce: true)
     field(:archived?, boolean(), enforce: true)
     field(:os_pid, integer(), enforce: true)
@@ -84,8 +84,8 @@ defmodule LogWatcher.Tasks.Task do
   # computed from the schema fields (including its associations).
 
   @spec arg_file_name(String.t(), integer(), String.t(), String.t()) :: String.t()
-  def arg_file_name(session_id, gen, task_id, task_type) do
-    "#{make_log_prefix(session_id, gen, task_id, task_type)}-arg.json"
+  def arg_file_name(session_id, gen, command_id, name) do
+    "#{make_log_prefix(session_id, gen, command_id, name)}-arg.json"
   end
 
   @spec arg_file_name(t()) :: String.t()
@@ -94,17 +94,17 @@ defmodule LogWatcher.Tasks.Task do
   end
 
   @spec log_file_glob(String.t() | t()) :: String.t()
-  def log_file_glob(task_id) when is_binary(task_id) do
-    "*#{task_id}-log.json?"
+  def log_file_glob(command_id) when is_binary(command_id) do
+    "*#{command_id}-log.json?"
   end
 
-  def log_file_glob(%__MODULE__{task_id: task_id}) do
-    "*#{task_id}-log.json?"
+  def log_file_glob(%__MODULE__{command_id: command_id}) do
+    "*#{command_id}-log.json?"
   end
 
   @spec log_file_name(String.t(), integer(), String.t(), String.t(), boolean()) :: String.t()
-  def log_file_name(session_id, gen, task_id, task_type, is_archived \\ false) do
-    "#{make_log_prefix(session_id, gen, task_id, task_type)}-log.#{log_extension(is_archived)}"
+  def log_file_name(session_id, gen, command_id, name, is_archived \\ false) do
+    "#{make_log_prefix(session_id, gen, command_id, name)}-log.#{log_extension(is_archived)}"
   end
 
   @spec log_file_name(t()) :: String.t()
@@ -118,8 +118,8 @@ defmodule LogWatcher.Tasks.Task do
   end
 
   @spec result_file_name(String.t(), integer(), String.t(), String.t()) :: String.t()
-  def result_file_name(session_id, gen, task_id, task_type) do
-    "#{make_log_prefix(session_id, gen, task_id, task_type)}-result.json"
+  def result_file_name(session_id, gen, command_id, name) do
+    "#{make_log_prefix(session_id, gen, command_id, name)}-result.json"
   end
 
   @spec result_file_name(t()) :: String.t()
@@ -128,9 +128,9 @@ defmodule LogWatcher.Tasks.Task do
   end
 
   @spec make_log_prefix(String.t(), integer(), String.t(), String.t()) :: String.t()
-  def make_log_prefix(session_id, gen, task_id, task_type) do
+  def make_log_prefix(session_id, gen, command_id, name) do
     gen_str = to_string(gen) |> String.pad_leading(4, "0")
-    "#{session_id}-#{gen_str}-#{task_type}-#{task_id}"
+    "#{session_id}-#{gen_str}-#{name}-#{command_id}"
   end
 
   @spec log_extension(boolean()) :: String.t()

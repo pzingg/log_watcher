@@ -66,6 +66,15 @@ defmodule LogWatcher.Sessions.Event do
     0
   end
 
+  @spec session_topic(String.t() | t()) :: String.t()
+  def session_topic(session_id) when is_binary(session_id) do
+    "session:#{session_id}"
+  end
+
+  def session_topic(%Session{id: session_id}) do
+    "session:#{session_id}"
+  end
+
   @doc false
   def changeset(event, attrs) do
     event
@@ -84,34 +93,46 @@ defmodule LogWatcher.Sessions.Event do
   end
 
   # %{
-  #  data: %{
-  #    exit_status: 0,
-  #    gen: 9,
-  #    message: "read arg file",
-  #    session_id: "01FT49N8EHPPDR2BPD0R74R4AP",
-  #    log_dir: ".../sessions/01FT49N8CPDVQ9XV2P4G2GRWT7/output",
-  #    status: "completed",
-  #    task_id: "T3842",
-  #    task_type: "create",
-  #    time: "2022-01-23T12:22:23"
-  #  },
-  #  event_type: :script_terminated,
-  #  topic: "session:01FT49N8EHPPDR2BPD0R74R4AP"
+  #  errors: [],
+  #  event_type: :task_updated,
+  #  file_name: "01FT9CJDKYK7M95QQ198B8VGGZ-0003-update-T4021-log.jsonl",
+  #  gen: 3,
+  #  level: 6,
+  #  log_dir: ".../sessions/01FT9CJDJ5KQ95CN1MYMACYD6Y/output",
+  #  message: "Command T4021 started on line 1",
+  #  os_pid: 131882,
+  #  progress: nil,
+  #  session_id: "01FT9CJDKYK7M95QQ198B8VGGZ",
+  #  started_at: "2022-01-25T11:49:28",
+  #  status: "started",
+  #  command_id: "T4021",
+  #  name: "update",
+  #  time: "2022-01-25T11:49:28"
   # }
+  def log_watcher_changeset(event, %{event_type: event_type} = attrs) do
+    event_type = stringize(event_type)
 
-  def log_watcher_changeset(event, %{data: raw_data} = raw_attrs) do
-    {event_type, attrs} = Map.pop!(raw_attrs, :event_type)
-    {event_attrs, data} = Map.split(raw_data, [:session_id, :task_type, :task_id, :time])
+    {attrs, data} =
+      attrs
+      |> Map.drop([:task_ref, :event_type])
+      |> Map.split([:session_id, :name, :command_id, :time])
+
+    session_id = Map.fetch!(attrs, :session_id)
+    topic = session_topic(session_id)
+    command_id = Map.get(attrs, :command_id)
+    name = Map.get(attrs, :name)
 
     attrs =
-      Map.merge(attrs, %{
+      attrs
+      |> Map.merge(%{
         version: 1,
-        type: stringize(event_type),
+        type: event_type,
+        topic: topic,
+        source: name,
+        session_id: session_id,
+        transaction_id: command_id,
         data: data,
-        source: Map.get(event_attrs, :task_type),
-        session_id: Map.get(event_attrs, :session_id),
-        transaction_id: Map.get(event_attrs, :task_id),
-        initialized_at: Map.get_lazy(event_attrs, :time, fn -> DateTime.utc_now() end)
+        initialized_at: Map.get_lazy(attrs, :time, fn -> DateTime.utc_now() end)
       })
 
     changeset(event, attrs)

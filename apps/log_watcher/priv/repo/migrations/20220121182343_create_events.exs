@@ -9,7 +9,7 @@ defmodule LogWatcher.Repo.Migrations.CreateEvents do
       add :type, :string
       add :source, :string
       add :data, :map
-      add :session_id, references(:sessions, type: :binary_id, on_delete: :nothing)
+      add :session_id, :binary_id
       add :transaction_id, :string
       add :ttl, :integer
       add :initialized_at, :utc_datetime, null: false

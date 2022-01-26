@@ -1,10 +1,10 @@
 defmodule LogWatcher.ScriptServer do
   @moduledoc """
   A GenServer that launches long-running POSIX shell scripts (as implemented
-  in Python or R) under an Elixir Task, and can cancel them by sending
+  in Python or R) under an Elixir Command, and can cancel them by sending
   SIGINT signals. The shell scripts are expected to produce JSON line
   output on stdout which is captured and parsed when the script (and Elixir
-  Task) terminate.
+  Command) terminate.
 
   We could use Elixir Ports for this work, but this implementation is
   potentially simpler. Progress and other information from the
@@ -15,89 +15,89 @@ defmodule LogWatcher.ScriptServer do
 
   require Logger
 
-  alias LogWatcher.Sessions.Session
+  alias LogWatcher.CommandStarter
 
   defmodule TaskInfo do
-    @enforce_keys [:task, :task_id, :job_id]
+    @enforce_keys [:script_task, :command_id, :job_id]
 
-    defstruct task: nil,
-              task_id: nil,
+    defstruct script_task: nil,
+              command_id: nil,
               job_id: 0,
               os_pid: 0,
               sigint_pending: false,
-              task_result: nil,
               awaiting_client: nil
 
     @type t() :: %__MODULE__{
-            task: Elixir.Task.t(),
-            task_id: String.t(),
+            script_task: Task.t(),
+            command_id: String.t(),
             job_id: integer(),
             os_pid: integer(),
             sigint_pending: boolean(),
-            task_result: term(),
             awaiting_client: GenServer.from() | nil
           }
   end
 
   @type state() :: %{required(reference()) => TaskInfo.t()}
 
-  @type task_key() :: reference() | integer() | String.t()
+  @type command_key() :: reference() | integer() | String.t()
 
-  @info_keys [
+  @event_data_keys [
     :session_id,
     :log_dir,
-    :task_id,
-    :task_type,
+    :command_id,
+    :name,
     :gen
   ]
 
+  # Public interface
+
   @doc """
-  Public interface. Start a linked GenServer.
+  Start a linked GenServer.
   """
   def start_link(opts) do
     GenServer.start_link(__MODULE__, :ok, opts)
   end
 
   @doc """
-  Public interface. Launch and monitor a shell script.
+  Launch and monitor a shell script.
   """
-  @spec run_script(String.t(), %{required(:task_id) => String.t()}, pid()) :: reference()
+  @spec run_script(String.t(), %{required(:command_id) => String.t()}, pid()) :: reference()
   def run_script(script_path, start_args, listener) do
     GenServer.call(__MODULE__, {:run_script, script_path, start_args, listener})
   end
 
   @doc """
-  Public interface. Cancel a task by sending a SIGINT signal to the
+  Cancel the script task by sending a SIGINT signal to the
   task's POSIX process. If the POSIX process id has not been read yet,
   the signal will be sent as soon as the process id is set.
 
   The `key` argument may be either a reference to the Elixir Task, an
-  Oban job ID (integer), or a task ID (string).
+  Oban job ID (integer), or the command ID (string).
   """
-  @spec cancel(task_key()) :: :ok | {:error, :not_found}
+  @spec cancel(command_key()) :: :ok | {:error, :not_found}
   def cancel(key) do
     GenServer.call(__MODULE__, {:cancel, key})
   end
 
   @doc """
-  Public interface. Shutdown the task.
+  Shutdown the script task.
 
   The `key` argument may be either a reference to the Elixir Task, an
-  Oban job ID (integer), or a task ID (string).
+  Oban job ID (integer), or the command ID (string).
   """
-  @spec kill(task_key()) :: :ok | {:error, :not_found}
+  @spec kill(command_key()) :: :ok | {:error, :not_found}
   def kill(key) do
     GenServer.call(__MODULE__, {:kill, key})
   end
 
   @doc """
-  Public interface. Wait for the Elixir Task to complete. Note
-  that the POSIX process may still be running after the Task completes.
+  Wait for the script task to complete. Note
+  that the POSIX process may still be running after the task completes.
 
   The `key` argument may be either a reference to the Elixir Task, an
-  Oban job ID (integer), or a task ID (string).
+  Oban job ID (integer), or the command ID (string).
   """
-  @spec await(task_key(), integer()) ::
+  @spec await(command_key(), integer()) ::
           {:ok, term()} | {:error, :not_found | :timeout | :shutdown_requested}
   def await(key, timeout) do
     # Prevent this by specifying (timeout + 100) in the GenServer.call:
@@ -111,16 +111,20 @@ defmodule LogWatcher.ScriptServer do
   end
 
   @doc """
-  Public interface. Update the GenServer, to associate the POSIX process id
-  of the running script with the Elixir task that launched the script
-  (similar to an Elixir Port).
+  Update the GenServer, to associate the POSIX process id
+  of the running script with the key of the Elixir Task that launched
+  the script.
   """
   @spec update_os_pid(reference(), integer()) :: :ok | {:error, :not_found}
   def update_os_pid(task_ref, os_pid) do
     GenServer.call(__MODULE__, {:update_os_pid, task_ref, os_pid})
   end
 
-  @doc false
+  # Callbacks
+
+  @doc """
+  The state is a map of task refs to TaskInfo structs.
+  """
   @impl true
   @spec init(term()) :: {:ok, state()}
   def init(_arg) do
@@ -133,7 +137,7 @@ defmodule LogWatcher.ScriptServer do
   @spec handle_call(term(), GenServer.from(), state()) ::
           {:reply, term(), state()} | {:noreply, state()}
   def handle_call(
-        {:run_script, script_path, %{task_id: task_id} = start_args, listener},
+        {:run_script, script_path, %{command_id: command_id} = start_args, listener},
         _from,
         state
       ) do
@@ -147,8 +151,8 @@ defmodule LogWatcher.ScriptServer do
     # After we start the task, we store its reference and the url it is fetching
     next_state =
       Map.put(state, task.ref, %TaskInfo{
-        task: task,
-        task_id: task_id,
+        script_task: task,
+        command_id: command_id,
         job_id: Map.get(start_args, :oban_job_id)
       })
 
@@ -156,7 +160,7 @@ defmodule LogWatcher.ScriptServer do
   end
 
   def handle_call({:cancel, key}, _from, state) do
-    case find_task_by_key(key, state) do
+    case get_task_info(key, state) do
       {task_ref, %TaskInfo{} = info} ->
         send_sigint_or_set_pending(task_ref, info, state)
 
@@ -167,7 +171,7 @@ defmodule LogWatcher.ScriptServer do
   end
 
   def handle_call({:kill, key}, _from, state) do
-    case find_task_by_key(key, state) do
+    case get_task_info(key, state) do
       {task_ref, %TaskInfo{} = info} ->
         next_info =
           maybe_send_reply(info, {:error, :shutdown_requested},
@@ -185,7 +189,7 @@ defmodule LogWatcher.ScriptServer do
   end
 
   def handle_call({:await, key, timeout}, from, state) do
-    case find_task_by_key(key, state) do
+    case get_task_info(key, state) do
       {task_ref, %TaskInfo{} = info} ->
         set_awaiting_client(task_ref, info, timeout, from, state)
 
@@ -197,13 +201,13 @@ defmodule LogWatcher.ScriptServer do
 
   def handle_call({:update_os_pid, task_ref, os_pid}, _from, state) do
     case Map.get(state, task_ref) do
-      %TaskInfo{task_id: task_id, sigint_pending: true} = info ->
+      %TaskInfo{command_id: command_id, sigint_pending: true} = info ->
         _ = Logger.error("ScriptServer update_os_pid, sending pending SIGINT to #{os_pid}")
 
         next_state =
           Map.put(state, task_ref, %TaskInfo{info | os_pid: os_pid, sigint_pending: false})
 
-        {:reply, send_sigint(task_id, os_pid), next_state}
+        {:reply, send_sigint(command_id, os_pid), next_state}
 
       %TaskInfo{} = info ->
         next_state = Map.put(state, task_ref, %TaskInfo{info | os_pid: os_pid})
@@ -234,10 +238,10 @@ defmodule LogWatcher.ScriptServer do
   end
 
   def handle_info({:DOWN, task_ref, _, _, reason}, state) do
-    # What does :noconnection reason mean? See Task.yield implementation.
+    # What does :noconnection reason mean? See Command.yield implementation.
     case Map.get(state, task_ref) do
-      %TaskInfo{task_id: task_id} ->
-        _ = Logger.error("ScriptServer task #{task_id} DOWN with reason #{inspect(reason)}")
+      %TaskInfo{command_id: command_id} ->
+        _ = Logger.error("ScriptServer command #{command_id} DOWN with reason #{inspect(reason)}")
 
         {:noreply, demonitor_and_remove_task(task_ref, state)}
 
@@ -253,7 +257,7 @@ defmodule LogWatcher.ScriptServer do
   end
 
   def handle_info({task_ref, result}, state) when is_reference(task_ref) do
-    # Task completed with `result`
+    # Command completed with `result`
     case Map.get(state, task_ref) do
       %TaskInfo{} = info ->
         # Send result back to the `from` client of `handle_call({:await, ...)`.
@@ -291,18 +295,20 @@ defmodule LogWatcher.ScriptServer do
          %{
            log_dir: log_dir,
            session_id: session_id,
-           task_id: task_id,
-           task_type: task_type,
+           command_id: command_id,
+           command_name: command_name,
            gen: gen
          } = start_args,
          listener
        ) do
     _ =
-      Logger.info("ScriptServer task #{task_id} do_run_script start_args #{inspect(start_args)}")
+      Logger.info(
+        "ScriptServer command #{command_id} do_run_script start_args #{inspect(start_args)}"
+      )
 
-    info =
+    data =
       start_args
-      |> Enum.filter(fn {key, _value} -> Enum.member?(@info_keys, key) end)
+      |> Enum.filter(fn {key, _value} -> Enum.member?(@event_data_keys, key) end)
       |> Map.new()
 
     executable =
@@ -314,7 +320,7 @@ defmodule LogWatcher.ScriptServer do
 
     if is_nil(executable) do
       {:error,
-       info
+       data
        |> Map.put(:message, "no executable for #{Path.basename(script_path)}")
        |> Map.put(:status, "completed")}
     else
@@ -323,10 +329,10 @@ defmodule LogWatcher.ScriptServer do
         log_dir,
         "--session-id",
         session_id,
-        "--task-id",
-        task_id,
-        "--task-type",
-        task_type,
+        "--command-id",
+        command_id,
+        "--command-name",
+        command_name,
         "--gen",
         to_string(gen)
       ]
@@ -344,39 +350,33 @@ defmodule LogWatcher.ScriptServer do
 
       _ =
         Logger.info(
-          "ScriptServer task #{task_id} shelling out to #{executable} with args #{inspect(script_args)}"
+          "ScriptServer command #{command_id} shelling out to #{executable} with args #{inspect(script_args)}"
         )
 
       {output, exit_status} =
         System.cmd(executable, [script_path | script_args], cd: Path.dirname(script_path))
 
-      _ = Logger.info("ScriptServer task #{task_id} script exited with #{exit_status}")
-      _ = Logger.info("ScriptServer task #{task_id} output from script: #{inspect(output)}")
+      _ = Logger.info("ScriptServer command #{command_id} script exited with #{exit_status}")
+      _ = Logger.info("ScriptServer command #{command_id} output from script: #{inspect(output)}")
 
-      parse_script_output(info, output, exit_status, listener)
+      data =
+        data
+        |> Map.put(:status, "completed")
+        |> Map.put(:exit_status, exit_status)
+        |> parse_result(output)
+
+      _ = CommandStarter.send_event(listener, :script_terminated, data)
+
+      {:ok, data}
     end
   end
 
-  @spec parse_script_output(map(), String.t(), integer(), pid()) :: {:ok, map()}
-  defp parse_script_output(info, output, exit_status, listener) do
-    payload =
-      case String.split(output, "\n") |> get_last_json_line() do
-        nil ->
-          info
-          |> Map.put(:message, output)
-          |> Map.put(:status, "completed")
-          |> Map.put(:exit_status, exit_status)
-
-        data ->
-          info
-          |> Map.merge(data)
-          |> Map.put(:status, "completed")
-          |> Map.put(:exit_status, exit_status)
-      end
-
-    send(listener, {:script_terminated, payload})
-
-    {:ok, payload}
+  @spec parse_result(map(), String.t()) :: map()
+  defp parse_result(data, output) do
+    case String.split(output, "\n") |> get_last_json_line() do
+      nil -> Map.put(data, :message, output)
+      result -> Map.merge(data, result)
+    end
   end
 
   defp get_last_json_line(lines) do
@@ -391,8 +391,8 @@ defmodule LogWatcher.ScriptServer do
     end)
   end
 
-  @spec find_task_by_key(task_key(), state()) :: {reference(), TaskInfo.t()} | nil
-  defp find_task_by_key(key, state) when is_reference(key) do
+  @spec get_task_info(command_key(), state()) :: {reference(), TaskInfo.t()} | nil
+  defp get_task_info(key, state) when is_reference(key) do
     case Map.get(state, key) do
       %TaskInfo{} = info ->
         {key, info}
@@ -402,22 +402,22 @@ defmodule LogWatcher.ScriptServer do
     end
   end
 
-  defp find_task_by_key(key, state) when is_integer(key) do
+  defp get_task_info(key, state) when is_integer(key) do
     Enum.find(state, fn {_ref, %TaskInfo{job_id: job_id}} -> job_id == key end)
   end
 
-  defp find_task_by_key(key, state) when is_binary(key) do
-    Enum.find(state, fn {_ref, %TaskInfo{task_id: task_id}} -> task_id == key end)
+  defp get_task_info(key, state) when is_binary(key) do
+    Enum.find(state, fn {_ref, %TaskInfo{command_id: command_id}} -> command_id == key end)
   end
 
   @spec send_sigint_or_set_pending(reference(), TaskInfo.t(), state()) ::
           {:reply, :pending | :ok, state()}
   defp send_sigint_or_set_pending(
          task_ref,
-         %TaskInfo{task_id: task_id, os_pid: 0} = info,
+         %TaskInfo{command_id: command_id, os_pid: 0} = info,
          state
        ) do
-    _ = Logger.info("ScriptServer task #{task_id} set sigint_pending")
+    _ = Logger.info("ScriptServer command #{command_id} set sigint_pending")
 
     next_state = Map.put(state, task_ref, %TaskInfo{info | sigint_pending: true})
 
@@ -426,21 +426,21 @@ defmodule LogWatcher.ScriptServer do
 
   defp send_sigint_or_set_pending(
          task_ref,
-         %TaskInfo{task_id: task_id, os_pid: os_pid} = info,
+         %TaskInfo{command_id: command_id, os_pid: os_pid} = info,
          state
        ) do
-    _ = Logger.info("ScriptServer task #{task_id} send sigint")
+    _ = Logger.info("ScriptServer command #{command_id} send sigint")
 
     next_state = Map.put(state, task_ref, %TaskInfo{info | sigint_pending: false})
 
-    {:reply, send_sigint(task_id, os_pid), next_state}
+    {:reply, send_sigint(command_id, os_pid), next_state}
   end
 
   @spec send_sigint(String.t(), integer()) :: :ok | {:error, :no_pid}
   defp send_sigint(_task_id, 0), do: {:error, :no_pid}
 
-  defp send_sigint(task_id, os_pid) do
-    _ = Logger.error("ScriptServer task #{task_id} sending \"kill -s INT\" to #{os_pid}")
+  defp send_sigint(command_id, os_pid) do
+    _ = Logger.error("ScriptServer command #{command_id} sending \"kill -s INT\" to #{os_pid}")
     _ = System.cmd("kill", ["-s", "INT", to_string(os_pid)])
     :ok
   end
@@ -449,7 +449,7 @@ defmodule LogWatcher.ScriptServer do
           {:reply, :ok | {:error, :shutting_down}, state()}
   defp set_awaiting_client(
          task_ref,
-         %TaskInfo{task_id: task_id, awaiting_client: nil} = info,
+         %TaskInfo{command_id: command_id, awaiting_client: nil} = info,
          timeout,
          from,
          state
@@ -458,7 +458,7 @@ defmodule LogWatcher.ScriptServer do
     _ = Process.send_after(self(), {:await_timed_out, task_ref}, timeout)
 
     next_state = Map.put(state, task_ref, %TaskInfo{info | awaiting_client: from})
-    _ = Logger.info("ScriptServer task #{task_id} yield client set")
+    _ = Logger.info("ScriptServer command #{command_id} yield client set")
 
     # Reply will come later from `handle_info({task_ref, result}, ...)`.
     {:noreply, next_state}
@@ -466,12 +466,12 @@ defmodule LogWatcher.ScriptServer do
 
   defp set_awaiting_client(
          _task_ref,
-         %TaskInfo{task_id: task_id},
+         %TaskInfo{command_id: command_id},
          _timeout,
          _from,
          state
        ) do
-    _ = Logger.error("ScriptServer task #{task_id} yield client already set")
+    _ = Logger.error("ScriptServer command #{command_id} yield client already set")
     {:reply, {:error, :shutting_down}, state}
   end
 
@@ -484,7 +484,7 @@ defmodule LogWatcher.ScriptServer do
 
   @spec maybe_send_reply(TaskInfo.t(), term(), Keyword.t()) :: TaskInfo.t()
   defp maybe_send_reply(
-         %TaskInfo{task_id: task_id, awaiting_client: nil} = info,
+         %TaskInfo{command_id: command_id, awaiting_client: nil} = info,
          reply,
          opts
        ) do
@@ -494,7 +494,7 @@ defmodule LogWatcher.ScriptServer do
     if !fail_silently && !is_nil(log_message) do
       _ =
         Logger.error(
-          "ScriptServer task #{task_id} #{log_message} no client for reply #{inspect(reply)}"
+          "ScriptServer command #{command_id} #{log_message} no client for reply #{inspect(reply)}"
         )
     end
 
@@ -502,7 +502,7 @@ defmodule LogWatcher.ScriptServer do
   end
 
   defp maybe_send_reply(
-         %TaskInfo{task_id: task_id, awaiting_client: from} = info,
+         %TaskInfo{command_id: command_id, awaiting_client: from} = info,
          reply,
          opts
        ) do
@@ -511,7 +511,7 @@ defmodule LogWatcher.ScriptServer do
     if !is_nil(log_message) do
       _ =
         Logger.error(
-          "ScriptServer task #{task_id} #{log_message} sending reply #{inspect(reply)}"
+          "ScriptServer command #{command_id} #{log_message} sending reply #{inspect(reply)}"
         )
     end
 
@@ -523,7 +523,7 @@ defmodule LogWatcher.ScriptServer do
           {term(), state()}
   defp shutdown_and_remove_task(
          task_ref,
-         %TaskInfo{task: task, task_id: task_id},
+         %TaskInfo{script_task: task, command_id: command_id},
          state
        ) do
     next_state = demonitor_and_remove_task(task_ref, state)
@@ -531,16 +531,23 @@ defmodule LogWatcher.ScriptServer do
     reply =
       cond do
         is_nil(task.pid) ->
-          _ = Logger.error("ScriptServer task #{task_id} kill no pid")
+          _ = Logger.error("ScriptServer command #{command_id} kill no pid")
           {:error, :no_pid}
 
         Process.alive?(task.pid) ->
-          _ = Logger.error("ScriptServer task #{task_id} shutting down pid #{inspect(task.pid)}")
+          _ =
+            Logger.error(
+              "ScriptServer command #{command_id} shutting down pid #{inspect(task.pid)}"
+            )
+
           _ = Process.exit(task.pid, :shutdown)
           :ok
 
         true ->
-          _ = Logger.error("ScriptServer task #{task_id} kill #{inspect(task.pid)} already dead")
+          _ =
+            Logger.error(
+              "ScriptServer command #{command_id} kill #{inspect(task.pid)} already dead"
+            )
 
           {:error, :noproc}
       end
