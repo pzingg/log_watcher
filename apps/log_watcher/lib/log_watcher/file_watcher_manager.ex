@@ -8,9 +8,10 @@ defmodule LogWatcher.FileWatcherManager do
   require Logger
 
   alias LogWatcher.FileWatcher
+  alias LogWatcher.FileWatcherSupervisor
 
-  # State is a map from directories to GenServer servers.
-  @type state() :: %{required(String.t()) => pid()}
+  # State is a list of watched directories.
+  @type state() :: [String.t()]
 
   # Public interface
 
@@ -41,7 +42,7 @@ defmodule LogWatcher.FileWatcherManager do
     # Trap exits so we terminate if parent dies
     _ = Process.flag(:trap_exit, true)
 
-    {:ok, %{}}
+    {:ok, []}
   end
 
   @doc false
@@ -89,13 +90,13 @@ defmodule LogWatcher.FileWatcherManager do
 
   defp do_watch(session_id, command_id, file_path, state) do
     log_dir = Path.dirname(file_path)
+    {result, state} = find_or_add_watcher(log_dir, state)
 
-    {pid_result, state} = find_or_add_watcher(session_id, log_dir, state)
-
-    case pid_result do
-      {:ok, pid} ->
+    case result do
+      :ok ->
         file_name = Path.basename(file_path)
-        {GenServer.call(pid, {:watch, command_id, file_name}), state}
+        watch_result = FileWatcher.watch(log_dir, session_id, command_id, file_name)
+        {watch_result, state}
 
       error ->
         {error, state}
@@ -105,50 +106,48 @@ defmodule LogWatcher.FileWatcherManager do
   defp do_unwatch(file_path, cleanup, state) do
     log_dir = Path.dirname(file_path)
 
-    case Map.get(state, log_dir) do
-      nil ->
-        {:ok, state}
+    if Enum.member?(state, log_dir) do
+      file_name = Path.basename(file_path)
+      result = FileWatcher.unwatch(log_dir, file_name, cleanup)
 
-      pid ->
-        file_name = Path.basename(file_path)
+      case result do
+        {:ok, :gone} ->
+          {:ok, List.delete(state, log_dir)}
 
-        case GenServer.call(pid, {:unwatch, file_name, cleanup}) do
-          {:ok, :gone} ->
-            {:ok, Map.delete(state, log_dir)}
+        {:ok, _} ->
+          {:ok, state}
 
-          {:ok, _} ->
-            {:ok, state}
-
-          error ->
-            {error, state}
-        end
+        error ->
+          {error, state}
+      end
+    else
+      {:ok, state}
     end
   end
 
-  defp find_or_add_watcher(session_id, log_dir, state) do
-    case Map.get(state, log_dir) do
-      nil ->
-        case FileWatcher.start_link(session_id: session_id, log_dir: log_dir) do
-          {:ok, pid} ->
-            {{:ok, pid}, Map.put(state, log_dir, pid)}
+  defp find_or_add_watcher(log_dir, state) do
+    if Enum.member?(state, log_dir) do
+      {:ok, state}
+    else
+      case FileWatcherSupervisor.start_watcher(log_dir) do
+        {:ok, _pid} ->
+          {:ok, [log_dir | state]}
 
-          error ->
-            {error, state}
-        end
+        :ignore ->
+          {:ignore, state}
 
-      pid ->
-        {{:ok, pid}, state}
+        error ->
+          {error, state}
+      end
     end
   end
 
   defp remove_watcher(log_dir, state) do
-    case Map.get(state, log_dir) do
-      nil ->
-        {:ok, state}
-
-      pid ->
-        GenServer.call(pid, :kill)
-        {:ok, Map.delete(state, log_dir)}
+    if Enum.member?(state, log_dir) do
+      FileWatcher.kill(log_dir)
+      {:ok, List.delete(state, log_dir)}
+    else
+      {:ok, state}
     end
   end
 end

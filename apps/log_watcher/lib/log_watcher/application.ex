@@ -9,11 +9,15 @@ defmodule LogWatcher.Application do
     children = [
       # Start the Ecto repository
       LogWatcher.Repo,
-      # Supervise file watches
+      # Dynamically supervise per-directory FileWatcher processes
+      {LogWatcher.FileWatcherSupervisor, name: LogWatcher.FileWatcherSupervisor},
+      # Map files and directories being watched to FileWatcher processes
       {LogWatcher.FileWatcherManager, name: LogWatcher.FileWatcherManager},
-      # Run scripts
+      # Dynamically supervise per-command ScriptRunner processes
+      {LogWatcher.CommandSupervisor, name: LogWatcher.CommandSupervisor},
+      # Map command or job ids to ScriptRunner processes
       {LogWatcher.CommandManager, name: LogWatcher.CommandManager},
-      # Monitor long running scripts via Elixir Commands.
+      # Asyncronously run the OS processes running the scripts
       {Task.Supervisor, name: LogWatcher.TaskSupervisor},
       # Start the PubSub system
       {Phoenix.PubSub, name: LogWatcher.PubSub},

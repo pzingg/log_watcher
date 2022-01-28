@@ -1,9 +1,6 @@
 defmodule LogWatcher.FileWatcher do
   @moduledoc """
-  A GenServer that monitors a directory for file system changes,
-  and broadcasts progress over Elixir PubSub. The directory, called
-  the "log_dir" is identified by a "session_id" that defines
-  the well-known PubSub topic, `session:session_id`.
+  A GenServer that monitors a directory for file system changes.
 
   Once started, clients of the server add individual files to be
   watched for file modifications using the Elixir `FileSystem`
@@ -33,7 +30,8 @@ defmodule LogWatcher.FileWatcher do
 
   The payload for each of these messages is the file name (without
   the path) that produced the change, and the map that was parsed,
-  containing at a minimum the `:session_id` and `:status` items.
+  containing at a minimum the `:session_id`, `command_id` and
+  `:status` items.
   """
   use GenServer
 
@@ -42,9 +40,11 @@ defmodule LogWatcher.FileWatcher do
   alias LogWatcher.ScriptRunner
 
   defmodule WatchedFile do
-    @enforce_keys [:command_id, :stream]
+    @enforce_keys [:session_id, :command_id, :file_name, :stream]
 
-    defstruct command_id: nil,
+    defstruct session_id: nil,
+              command_id: nil,
+              file_name: nil,
               stream: nil,
               position: 0,
               size: 0,
@@ -52,7 +52,9 @@ defmodule LogWatcher.FileWatcher do
               start_sent: false
 
     @type t :: %__MODULE__{
+            session_id: String.t(),
             command_id: String.t(),
+            file_name: String.t(),
             stream: File.Stream.t(),
             position: integer(),
             size: integer(),
@@ -64,9 +66,13 @@ defmodule LogWatcher.FileWatcher do
     Construct a `LogWatcher.WatchedFile` struct for a directory and file name.
     """
     @spec new(String.t(), String.t(), String.t()) :: t()
-    def new(command_id, dir, file_name) do
-      path = Path.join(dir, file_name)
-      %__MODULE__{command_id: command_id, stream: File.stream!(path)}
+    def new(session_id, command_id, path) do
+      %__MODULE__{
+        session_id: session_id,
+        command_id: command_id,
+        file_name: Path.basename(path),
+        stream: File.stream!(path)
+      }
     end
   end
 
@@ -76,23 +82,21 @@ defmodule LogWatcher.FileWatcher do
     end
   end
 
-  @enforce_keys [:fs_pid, :session_id, :log_dir]
+  @enforce_keys [:fs_pid, :log_dir]
 
   defstruct fs_pid: nil,
-            session_id: nil,
             log_dir: nil,
             in_cleanup: false,
             files: %{}
 
   @type state() :: %__MODULE__{
           fs_pid: pid(),
-          session_id: String.t(),
           log_dir: String.t(),
           in_cleanup: boolean(),
           files: map()
         }
 
-  @type gproc_key :: {:n, :l, {:session_id, String.t()}}
+  @type gproc_key :: {:n, :l, {:watch_dir, String.t()}}
 
   @command_started_status ["running", "cancelled", "completed"]
 
@@ -101,12 +105,42 @@ defmodule LogWatcher.FileWatcher do
   @doc """
   Public interface. Start the GenServer for a session.
   """
-  @spec start_link(Keyword.t()) :: GenServer.on_start()
-  def start_link(opts) do
-    session_id = Keyword.fetch!(opts, :session_id)
-    log_dir = Keyword.fetch!(opts, :log_dir)
-    _ = Logger.info("FileWatcher start_link #{session_id} #{log_dir}")
-    GenServer.start_link(__MODULE__, [session_id, log_dir])
+  @spec start_link(String.t()) :: GenServer.on_start()
+  def start_link(log_dir) when is_binary(log_dir) do
+    GenServer.start_link(__MODULE__, log_dir, name: via_tuple(log_dir))
+  end
+
+  def start_link(_arg), do: {:error, :badarg}
+
+  @doc false
+  def kill(log_dir) do
+    GenServer.call(via_tuple(log_dir), :kill)
+  end
+
+  @doc false
+  def watch(log_dir, session_id, command_id, file_name) do
+    GenServer.call(via_tuple(log_dir), {:watch, session_id, command_id, file_name})
+  end
+
+  @doc false
+  def unwatch(log_dir, file_name, cleanup \\ false) do
+    GenServer.call(via_tuple(log_dir), {:unwatch, file_name, cleanup})
+  end
+
+  @doc """
+  Return the :via tuple for this server.
+  """
+  @spec via_tuple(String.t()) :: {:via, :gproc, gproc_key()}
+  def via_tuple(log_dir) do
+    {:via, :gproc, registry_key(log_dir)}
+  end
+
+  @doc """
+  Return the pid for a server.
+  """
+  @spec whereis(String.t()) :: pid() | :undefined
+  def whereis(log_dir) do
+    :gproc.where(registry_key(log_dir))
   end
 
   # Callbacks
@@ -114,8 +148,8 @@ defmodule LogWatcher.FileWatcher do
   @doc false
   @impl true
   @spec init(term()) :: {:ok, state()}
-  def init([session_id, log_dir]) do
-    _ = Logger.info("FileWatcher init #{session_id} #{log_dir}")
+  def init(log_dir) do
+    _ = Logger.info("FileWatcher init #{log_dir}")
 
     # Trap exits so we terminate if parent dies
     _ = Process.flag(:trap_exit, true)
@@ -128,7 +162,6 @@ defmodule LogWatcher.FileWatcher do
 
     initial_state = %__MODULE__{
       fs_pid: fs_pid,
-      session_id: session_id,
       log_dir: log_dir
     }
 
@@ -158,20 +191,20 @@ defmodule LogWatcher.FileWatcher do
     {:stop, :normal, :ok, next_state}
   end
 
-  def handle_call({:watch, _, _}, _from, %__MODULE__{in_cleanup: true} = state) do
+  def handle_call({:watch, _, _, _}, _from, %__MODULE__{in_cleanup: true} = state) do
     {:reply, {:error, :in_cleanup}, state}
   end
 
   def handle_call(
-        {:watch, command_id, file_name},
+        {:watch, session_id, command_id, file_name},
         _from,
-        %__MODULE__{session_id: session_id, log_dir: log_dir, files: files} = state
+        %__MODULE__{log_dir: log_dir, files: files} = state
       ) do
     if Map.get(files, file_name) do
       {:reply, {:error, :already_watching}, state}
     else
-      file = WatchedFile.new(command_id, log_dir, file_name)
-      file = check_for_lines(session_id, file)
+      file = WatchedFile.new(session_id, command_id, Path.join(log_dir, file_name))
+      file = check_for_lines(file)
       _ = Logger.info("FileWatcher watch added for #{file_name}")
       state = %__MODULE__{state | files: Map.put_new(files, file_name, file)}
       {:reply, :ok, state}
@@ -185,7 +218,7 @@ defmodule LogWatcher.FileWatcher do
   def handle_call(
         {:unwatch, file_name, cleanup},
         _from,
-        %__MODULE__{session_id: session_id, files: files} = state
+        %__MODULE__{files: files} = state
       ) do
     {reply, state} =
       case Map.get(files, file_name) do
@@ -193,7 +226,7 @@ defmodule LogWatcher.FileWatcher do
           {{:error, :not_found}, state}
 
         %WatchedFile{} = file ->
-          _ = check_for_lines(session_id, file)
+          _ = check_for_lines(file)
           files = Map.drop(files, file_name)
 
           if cleanup && Enum.empty?(files) do
@@ -212,7 +245,7 @@ defmodule LogWatcher.FileWatcher do
   @spec handle_info(term(), state()) :: {:noreply, state()} | {:stop, :normal, state()}
   def handle_info(
         {:file_event, fs_pid, {path, events}},
-        %__MODULE__{fs_pid: fs_pid, session_id: session_id, files: files} = state
+        %__MODULE__{fs_pid: fs_pid, files: files} = state
       ) do
     # Logger.info("FileWatcher #{inspect(fs_pid)} #{path}: #{inspect(events)}")
 
@@ -225,7 +258,7 @@ defmodule LogWatcher.FileWatcher do
       %WatchedFile{} = file ->
         next_state =
           if Enum.member?(events, :modified) do
-            next_file = check_for_lines(session_id, file)
+            next_file = check_for_lines(file)
             %__MODULE__{state | files: Map.put(files, file_name, next_file)}
           else
             state
@@ -256,18 +289,22 @@ defmodule LogWatcher.FileWatcher do
 
   # Private functions
 
+  @spec registry_key(String.t()) :: gproc_key()
+  defp registry_key(log_dir) do
+    {:n, :l, {:watch_dir, log_dir}}
+  end
+
   @spec check_all_files(state()) :: map()
-  defp check_all_files(%__MODULE__{session_id: session_id, files: files}) do
+  defp check_all_files(%__MODULE__{files: files}) do
     Enum.map(files, fn {file_name, file} ->
-      next_file = check_for_lines(session_id, file)
+      next_file = check_for_lines(file)
       {file_name, next_file}
     end)
     |> Enum.into(%{})
   end
 
-  @spec check_for_lines(String.t(), WatchedFile.t()) :: WatchedFile.t()
+  @spec check_for_lines(WatchedFile.t()) :: WatchedFile.t()
   defp check_for_lines(
-         session_id,
          %WatchedFile{
            stream: stream,
            position: position,
@@ -292,7 +329,7 @@ defmodule LogWatcher.FileWatcher do
           last_modified: stat.mtime
       }
 
-      handle_lines(session_id, next_file, lines)
+      handle_lines(next_file, lines)
     else
       {:exists, _} ->
         # Logger.error("FileWatcher #{stream.path} does not exist")
@@ -312,31 +349,33 @@ defmodule LogWatcher.FileWatcher do
     end
   end
 
-  @spec handle_lines(String.t(), WatchedFile.t(), [String.t()]) :: WatchedFile.t()
-  defp handle_lines(_session_id, %WatchedFile{} = file, []), do: file
+  @spec handle_lines(WatchedFile.t(), [String.t()]) :: WatchedFile.t()
+  defp handle_lines(%WatchedFile{} = file, []), do: file
 
-  defp handle_lines(session_id, %WatchedFile{stream: stream} = file, lines) do
-    file_name = Path.basename(stream.path)
-
+  defp handle_lines(%WatchedFile{file_name: file_name} = file, lines) do
     _ = Logger.info("FileWatcher got #{Enum.count(lines)} line(s) from #{file_name}")
 
     Enum.reduce(lines, file, fn line, acc ->
-      report_changes(session_id, file_name, line, acc)
+      report_changes(line, acc)
     end)
   end
 
-  @spec report_changes(String.t(), String.t(), String.t(), WatchedFile.t()) :: WatchedFile.t()
+  @spec report_changes(String.t(), WatchedFile.t()) :: WatchedFile.t()
   defp report_changes(
-         session_id,
-         file_name,
          line,
-         %WatchedFile{command_id: command_id, start_sent: start_sent} = file
+         %WatchedFile{
+           session_id: session_id,
+           command_id: command_id,
+           file_name: file_name,
+           start_sent: start_sent
+         } = file
        ) do
     case Jason.decode(line, keys: :atoms) do
       {:ok, data} when is_map(data) ->
         info =
           data
           |> Map.put_new(:session_id, session_id)
+          |> Map.put_new(:command_id, command_id)
           |> Map.put_new(:status, "undefined")
           |> Map.put_new(:file_name, file_name)
 

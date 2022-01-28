@@ -3,6 +3,7 @@ defmodule LogWatcher.CommandManager do
 
   require Logger
 
+  alias LogWatcher.CommandSupervisor
   alias LogWatcher.ScriptRunner
 
   @enforce_keys [:command_id, :job_id]
@@ -59,15 +60,10 @@ defmodule LogWatcher.CommandManager do
   @impl true
   def handle_call({:start_script, session, command_id, command_name, command_args}, from, state) do
     await_start = Map.get(command_args, :await_start, true)
+    job_id = Map.get(command_args, :oban_job_id, 0)
 
-    case ScriptRunner.start_link(
-           session: session,
-           command_id: command_id,
-           command_name: command_name,
-           command_args: command_args
-         ) do
+    case CommandSupervisor.start_script_runner(session, command_id, command_name, command_args) do
       {:ok, pid} ->
-        job_id = Map.get(command_args, :oban_job_id, 0)
         state = [%__MODULE__{command_id: command_id, job_id: job_id} | state]
         send(self(), {:run_script, from, pid, await_start})
         {:noreply, state}

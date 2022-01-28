@@ -6,7 +6,6 @@ defmodule LogWatcher.ScriptRunner do
 
   require Logger
 
-  alias LogWatcher.CommandManager
   alias LogWatcher.Commands
   alias LogWatcher.Commands.Command
   alias LogWatcher.FileWatcherManager
@@ -57,10 +56,11 @@ defmodule LogWatcher.ScriptRunner do
 
   # Public interface
 
-  def start_link(arg) do
-    command_id = Keyword.fetch!(arg, :command_id)
+  def start_link(%{command_id: command_id} = arg) do
     GenServer.start_link(__MODULE__, arg, name: via_tuple(command_id))
   end
+
+  def start_link(_arg), do: {:error, :badarg}
 
   def run_script(command_id, script_path, start_args) do
     GenServer.call(via_tuple(command_id), {:run_script, script_path, start_args})
@@ -119,16 +119,14 @@ defmodule LogWatcher.ScriptRunner do
 
   @doc false
   @impl true
-  def init(arg) do
+  def init(%{
+        session: session,
+        command_id: command_id,
+        command_name: command_name,
+        command_args: command_args
+      }) do
     # Trap exits so we terminate if parent dies
     _ = Process.flag(:trap_exit, true)
-
-    # TODO: verify arg
-
-    session = Keyword.fetch!(arg, :session)
-    command_id = Keyword.fetch!(arg, :command_id)
-    command_name = Keyword.fetch!(arg, :command_name)
-    command_args = Keyword.fetch!(arg, :command_args)
 
     state = %__MODULE__{
       command_args: command_args,
@@ -144,6 +142,8 @@ defmodule LogWatcher.ScriptRunner do
 
     {:ok, state}
   end
+
+  def init(_arg), do: {:error, :badarg}
 
   @doc false
   @impl true
@@ -524,7 +524,7 @@ defmodule LogWatcher.ScriptRunner do
   @spec maybe_send_reply(state(), term(), Keyword.t()) :: state()
   defp maybe_send_reply(
          %__MODULE__{command_id: command_id, awaiting_client: nil} = state,
-         reply,
+         _reply,
          opts
        ) do
     fail_silently = Keyword.get(opts, :fail_silently, false)
