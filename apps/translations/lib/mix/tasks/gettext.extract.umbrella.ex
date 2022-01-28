@@ -1,4 +1,4 @@
-defmodule Mix.Tasks.Gettext.Extract.Umbrella do
+defmodule Mix.Commands.Gettext.Extract.Umbrella do
   use Mix.Task
   @recursive false
 

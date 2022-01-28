@@ -42,14 +42,19 @@ defmodule LogWatcher.MixProject do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
+      {:broadway, "~> 1.0"},
+      {:credo, "~> 1.6", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.1", only: [:dev], runtime: false},
       {:dotenvy, "~> 0.3"},
       {:ecto_sql, "~> 3.6"},
+      {:ecto_ulid, "~> 0.3"},
       {:faker, "~> 0.16", only: [:dev, :test]},
       {:file_system, "~> 0.2"},
+      {:gen_stage, "~> 1.1"},
       {:gproc, "~> 0.9"},
       {:jason, "~> 1.2"},
       {:oban, "~> 2.7"},
+      {:phoenix, "~> 1.6.2"},
       {:phoenix_pubsub, "~> 2.0"},
       {:postgrex, "~> 0.15"},
       {:translations, in_umbrella: true},

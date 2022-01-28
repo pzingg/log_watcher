@@ -1,69 +1,40 @@
 defmodule LogWatcher.TypedStructTest do
   use LogWatcher.DataCase
 
-  alias LogWatcher.Tasks.{Session, Task}
-
-  test "01 session new" do
-    session = Session.new()
-
-    assert is_nil(session.session_id)
-    assert session.gen == -1
-  end
-
-  test "02 session ecto types" do
-    assert Enum.sort(Session.required_fields()) == [
-             :description,
-             :name,
-             :session_id,
-             :session_log_path
-           ]
-
-    assert Enum.sort(Session.all_fields()) == [
-             :description,
-             :gen,
-             :name,
-             :session_id,
-             :session_log_path
-           ]
-
-    assert Enum.sort(Session.changeset_types()) == [
-             {:description, :string},
-             {:gen, :integer},
-             {:name, :string},
-             {:session_id, :string},
-             {:session_log_path, :string}
-           ]
-  end
+  alias LogWatcher.Commands.Command
 
   test "03 task new" do
-    task = Task.new()
+    task = Command.new()
 
-    assert is_nil(task.task_id)
+    assert is_nil(task.command_id)
   end
 
   test "04 task ecto types" do
-    assert Enum.sort(Task.required_fields()) == [
+    assert Enum.sort(Command.required_fields()) == [
              :archived?,
+             :command_id,
              :created_at,
              :gen,
+             :log_dir,
              :log_prefix,
+             :name,
              :os_pid,
              :session_id,
-             :session_log_path,
              :status,
-             :task_id,
-             :task_type,
              :updated_at
            ]
 
-    assert Enum.sort(Task.all_fields()) == [
+    assert Enum.sort(Command.all_fields()) == [
              :archived?,
+             :command_id,
              :completed_at,
              :created_at,
              :errors,
              :gen,
              :last_message,
+             :log_dir,
              :log_prefix,
+             :name,
              :os_pid,
              :progress_counter,
              :progress_phase,
@@ -71,21 +42,21 @@ defmodule LogWatcher.TypedStructTest do
              :result,
              :running_at,
              :session_id,
-             :session_log_path,
              :status,
-             :task_id,
-             :task_type,
              :updated_at
            ]
 
-    assert Enum.sort(Task.changeset_types()) == [
+    assert Enum.sort(Command.changeset_types()) == [
              {:archived?, :boolean},
+             {:command_id, :string},
              {:completed_at, :naive_datetime},
              {:created_at, :naive_datetime},
              {:errors, {:array, :map}},
              {:gen, :integer},
              {:last_message, :string},
+             {:log_dir, :string},
              {:log_prefix, :string},
+             {:name, :string},
              {:os_pid, :integer},
              {:progress_counter, :integer},
              {:progress_phase, :string},
@@ -93,10 +64,7 @@ defmodule LogWatcher.TypedStructTest do
              {:result, :map},
              {:running_at, :naive_datetime},
              {:session_id, :string},
-             {:session_log_path, :string},
              {:status, :string},
-             {:task_id, :string},
-             {:task_type, :string},
              {:updated_at, :naive_datetime}
            ]
   end

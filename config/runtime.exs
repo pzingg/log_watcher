@@ -25,19 +25,24 @@ umbrella_env_paths =
 
 source!(umbrella_env_paths)
 
-oban_plugins =
+{oban_queues, oban_plugins} =
   if config_env() == :test do
-    [Oban.Plugins.Repeater]
+    # Oban testing. See https://hexdocs.pm/oban/Oban.html#module-testing
+    # Disable all job dispatching by setting queues: false or queues: nil
+    # Disable plugins via plugins: false.
+    # {false, false}
+    # But we apparently need the queue and the Repeater plugin...
+    {[commands: 10], [Oban.Plugins.Repeater]}
   else
-    [{Oban.Plugins.Pruner, max_age: 600}]
+    {[commands: 10], [{Oban.Plugins.Pruner, max_age: 600}]}
   end
 
 config :log_watcher, Oban,
   name: Oban,
   repo: LogWatcher.Repo,
+  queues: oban_queues,
   plugins: oban_plugins,
-  shutdown_grace_period: 1_000,
-  queues: [tasks: 10]
+  shutdown_grace_period: 1_000
 
 config :log_watcher, LogWatcher.Repo,
   username: env!("DB_USER", :string!),

@@ -11,7 +11,7 @@ class CancelException(RuntimeError):
   pass
 
 # TODO: put these in -log.jsonl, -start.json, and/or -result.json
-# 'time' 
+# 'time'
 # 'started_at'
 # 'completed_at'
 # 'result'
@@ -21,22 +21,22 @@ def format_utcnow():
   return datetime.datetime.utcnow().isoformat(timespec='milliseconds')
 
 def read_arg_file(info, arg_file):
-  path = os.path.join(info['session_log_path'], arg_file)
+  path = os.path.join(info['log_dir'], arg_file)
   with open(path, 'rt') as f:
     args = json.load(f)
     assert info['session_id'] == args['session_id']
-    assert info['task_id'] == args['task_id']
-    assert info['task_type'] == args['task_type']
+    assert info['command_id'] == args['command_id']
+    assert info['command_name'] == args['command_name']
     assert info['gen'] == args['gen']
 
-    for key in ['session_id', 'session_log_path', 'task_id', 'task_type', 'gen']:
+    for key in ['session_id', 'log_dir', 'command_id', 'command_name', 'gen']:
         if key in args:
             del args[key]
 
-    task_id = info['task_id']
+    command_id = info['command_id']
     info['time'] = format_utcnow()
     info['status'] = 'input'
-    info['message'] = f'Task {task_id} parsed {len(args.keys())} args'
+    info['message'] = f'Command {command_id} parsed {len(args.keys())} args'
 
     return (info, args)
 
@@ -65,10 +65,10 @@ def mock_status(info, line_no, num_lines, error):
     status = 'completed'
     result = {'params': [['a', 2], ['b', line_no]]}
 
-  task_id = info['task_id']
+  command_id = info['command_id']
   info['time'] = format_utcnow()
   info['status'] = status
-  info['message'] = f'Task {task_id} {status} on line {line_no}'
+  info['message'] = f'Command {command_id} {status} on line {line_no}'
   set_script_status(status)
 
   if progress_counter is not None and progress_total is not None:
@@ -81,27 +81,27 @@ def mock_status(info, line_no, num_lines, error):
 
   return (info, result, errors)
 
-def make_log_prefix(session_id, gen, task_id, task_type):
+def make_log_prefix(session_id, gen, command_id, name):
   gen_str = str(gen).zfill(4)
-  return f'{session_id}-{gen_str}-{task_type}-{task_id}'
+  return f'{session_id}-{gen_str}-{name}-{command_id}'
 
-def log_file_name(session_id, gen, task_id, task_type):
-  return f'{make_log_prefix(session_id, gen, task_id, task_type)}-log.jsonl'
+def log_file_name(session_id, gen, command_id, name):
+  return f'{make_log_prefix(session_id, gen, command_id, name)}-log.jsonl'
 
-def arg_file_name(session_id, gen, task_id, task_type):
-  return f'{make_log_prefix(session_id, gen, task_id, task_type)}-arg.json'
+def arg_file_name(session_id, gen, command_id, name):
+  return f'{make_log_prefix(session_id, gen, command_id, name)}-arg.json'
 
-def start_file_name(session_id, gen, task_id, task_type):
-  return f'{make_log_prefix(session_id, gen, task_id, task_type)}-start.json'
+def start_file_name(session_id, gen, command_id, name):
+  return f'{make_log_prefix(session_id, gen, command_id, name)}-start.json'
 
-def result_file_name(session_id, gen, task_id, task_type):
-  return f'{make_log_prefix(session_id, gen, task_id, task_type)}-result.json'
+def result_file_name(session_id, gen, command_id, name):
+  return f'{make_log_prefix(session_id, gen, command_id, name)}-result.json'
 
 # No 'os_pid' in arg file
-ARG_KEYS = ['time', 'session_id', 'task_id', 'task_type', 'gen']
+ARG_KEYS = ['session_id', 'command_id', 'command_name', 'gen', 'time']
 
 def write_start_file(start_file, info):
-  path = os.path.join(info['session_log_path'], start_file)
+  path = os.path.join(info['log_dir'], start_file)
   try:
     with open(path, 'wt') as f:
       json.dump(info, f, indent=2)
@@ -109,10 +109,10 @@ def write_start_file(start_file, info):
   except:
     pass
 
-  log_event('task_started', info)
+  log_event('command_started', info)
 
 def write_result_file(result_file, info, result_data):
-  path = os.path.join(info['session_log_path'], result_file)
+  path = os.path.join(info['log_dir'], result_file)
   try:
     with open(path, 'wt') as f:
       result_info = {k: v for k, v in info.items() if k not in ['result']}
@@ -126,13 +126,13 @@ def write_result_file(result_file, info, result_data):
   except:
     pass
 
-  event_type = f'''task_{info['status']}'''
+  event_type = f'''command_{info['status']}'''
   log_event(event_type, info)
 
 def log_event(event_type, info):
   info['event_type'] = event_type
   log_file = f'''{info['session_id']}-sesslog.jsonl'''
-  path = os.path.join(info['session_log_path'], log_file)
+  path = os.path.join(info['log_dir'], log_file)
   try:
     f = open(path, 'at')
     json.dump(info, f)
@@ -177,7 +177,7 @@ def log_error(error_type):
   trace = get_traceback(error_type)
   message = trace['error']
 
-  result_file = result_file_name(_global_args['session_id'], _global_args['gen'], _global_args['task_id'], _global_args['task_type'])
+  result_file = result_file_name(_global_args['session_id'], _global_args['gen'], _global_args['command_id'], _global_args['command_name'])
 
   result_info = {
     'succeeded': False,
@@ -192,12 +192,12 @@ def log_error(error_type):
 
   set_script_status(status)
   info = {
-    'time': format_utcnow(), 
+    'time': format_utcnow(),
     'os_pid': _global_args['os_pid'],
     'session_id': _global_args['session_id'],
-    'session_log_path': _global_args['log_path'],
-    'task_id': _global_args['task_id'],
-    'task_type': _global_args['task_type'],
+    'log_dir': _global_args['log_dir'],
+    'command_id': _global_args['command_id'],
+    'command_name': _global_args['command_name'],
     'gen': _global_args['gen'],
     'message': message,
     'status': status,
@@ -213,21 +213,21 @@ def set_script_status(status):
   global _global_args
   _global_args['status'] = status
 
-def cancel_task(signal_number, frame):
+def cancel_command(signal_number, frame):
   raise CancelException(f'signal #{signal_number} received')
 
-def run_job():
+def run_command():
   global _global_args
-  session_log_path = _global_args['log_path']
+  log_dir = _global_args['log_dir']
   session_id = _global_args['session_id']
-  task_id = _global_args['task_id']
-  task_type = _global_args['task_type']
+  command_id = _global_args['command_id']
+  command_name = _global_args['command_name']
   gen = _global_args['gen']
   error = _global_args['error']
   os_pid = _global_args['os_pid']
 
-  log_file = log_file_name(session_id, gen, task_id, task_type)
-  log_file_path = os.path.join(session_log_path, log_file)
+  log_file = log_file_name(session_id, gen, command_id, command_name)
+  log_file_path = os.path.join(log_dir, log_file)
   _global_args['log_f'] = log_file_path
   started_at = None
   running_at = None
@@ -236,30 +236,30 @@ def run_job():
 
   set_script_status('created')
   info = {
-    'time': format_utcnow(), 
+    'time': format_utcnow(),
     'os_pid': os_pid,
-    'session_id': session_id, 
-    'session_log_path': session_log_path,
-    'task_id': task_id, 
-    'task_type': task_type, 
+    'session_id': session_id,
+    'log_dir': log_dir,
+    'command_id': command_id,
+    'command_name': command_name,
     'gen': gen,
     'status': 'created',
-    'message': f'Task {task_id} created'
+    'message': f'Command {command_id} created'
   }
-  print(f'mock_task, writing initial log file')
+  print(f'mock_command, writing initial log file')
   log_info(info, log_file_path, initial = True)
-  log_event('task_created', info)
+  log_event('command_created', info)
 
-  signal.signal(signal.SIGINT, cancel_task)
+  signal.signal(signal.SIGINT, cancel_command)
 
-  arg_file = arg_file_name(session_id, gen, task_id, task_type)
-  info, task_args = read_arg_file(info, arg_file)
+  arg_file = arg_file_name(session_id, gen, command_id, command_name)
+  info, command_args = read_arg_file(info, arg_file)
 
-  print(f'mock_task, task_args are {task_args}')
+  print(f'mock_command, command_args are {command_args}')
   log_info(info, log_file_path)
 
   sleep_time = 1.0
-  num_lines = task_args['num_lines']
+  num_lines = command_args['num_lines']
   for line_no in range(1, num_lines+1):
     info, result, errors = mock_status(info, line_no, num_lines, error)
 
@@ -269,9 +269,9 @@ def run_job():
     if running_at is None and info['status'] in ['running', 'completed']:
       info['running_at'] = running_at = info['time']
       write_start = True
-  
+
     if info['status'] in ['cancelled', 'completed']:
-      result_file = result_file_name(session_id, gen, task_id, task_type)
+      result_file = result_file_name(session_id, gen, command_id, command_name)
       if info['status'] == 'completed' and len(errors) == 0:
         result_info = {
           'succeeded': True,
@@ -291,14 +291,14 @@ def run_job():
       write_result = True
 
     if write_start:
-      print(f'mock_task, writing start file')
-      start_file = start_file_name(session_id, gen, task_id, task_type)
+      print(f'mock_command, writing start file')
+      start_file = start_file_name(session_id, gen, command_id, command_name)
       write_start_file(start_file, info)
       write_start = False
       sleep_time = 0.25
 
     if write_result and result_file is not None:
-      print(f'mock_task, writing result file')
+      print(f'mock_command, writing result file')
       write_result_file(result_file, info, result)
       write_result = False
 
@@ -308,7 +308,7 @@ def run_job():
 
     time.sleep(sleep_time)
 
-  print(f'mock_task, closing log file')
+  print(f'mock_command, closing log file')
 
 def log_info(info, log_file_path, initial = False, suppress_exception = False):
   mode = 'wt' if initial else 'at'
@@ -325,12 +325,12 @@ def log_info(info, log_file_path, initial = False, suppress_exception = False):
 
 if __name__ == '__main__':
   import argparse
-  
-  parser = argparse.ArgumentParser(description='Run a session task')
-  parser.add_argument('-p', '--log-path', help='path containing log file', required=True)
+
+  parser = argparse.ArgumentParser(description='Run a session command')
+  parser.add_argument('-p', '--log-dir', help='directory containing log file', required=True)
   parser.add_argument('-s', '--session-id', help='session id', required=True)
-  parser.add_argument('-i', '--task-id', help='task id', required=True)
-  parser.add_argument('-t', '--task-type', help='task type', required=True)
+  parser.add_argument('-i', '--command-id', help='command id', required=True)
+  parser.add_argument('-n', '--command-name', help='command name', required=True)
   parser.add_argument('-g', '--gen', help='gen', type=int, required=True)
   parser.add_argument('-e', '--error', help='phase in which to generate error result')
   args = parser.parse_args()
@@ -340,7 +340,7 @@ if __name__ == '__main__':
   _global_args['log_f'] = None
   print(f'script started. cancel with:\n  kill -s INT {os_pid}')
   try:
-    run_job()
+    run_command()
   except CancelException:
     log_error('interrupt')
   except Exception:

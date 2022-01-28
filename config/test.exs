@@ -1,4 +1,6 @@
-use Mix.Config
+import Config
+
+config :logger, level: :debug
 
 # Configure your database
 #
@@ -6,8 +8,5 @@ use Mix.Config
 # to provide built-in test partitioning in CI environment.
 # Run `mix help test` for more information.
 config :log_watcher, LogWatcher.Repo,
-  username: "postgres",
-  password: "postgres",
-  database: "log_watcher_test#{System.get_env("MIX_TEST_PARTITION")}",
-  hostname: "localhost",
-  pool: Ecto.Adapters.SQL.Sandbox
+  pool: Ecto.Adapters.SQL.Sandbox,
+  ownership_timeout: 1_800_000

@@ -10,7 +10,7 @@ defmodule LogWatcher.DataCase do
   we enable the SQL sandbox, so changes done to the database
   are reverted at the end of every test. If you are using
   PostgreSQL, you can even run database tests asynchronously
-  by setting `use LogWatcher.DataCase, async: true`, although
+  by setting `use LogWatcher.DataCase, async: false`, although
   this option is not recommended for other databases.
   """
 
@@ -18,7 +18,7 @@ defmodule LogWatcher.DataCase do
 
   require Logger
 
-  alias LogWatcher.ScriptServer
+  alias LogWatcher.CommandManager
 
   using do
     quote do
@@ -32,7 +32,11 @@ defmodule LogWatcher.DataCase do
   end
 
   setup tags do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(LogWatcher.Repo)
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(LogWatcher.Repo, ownership_timeout: 600_000)
+
+    if tags[:async] do
+      raise "Don't use async: true"
+    end
 
     unless tags[:async] do
       Ecto.Adapters.SQL.Sandbox.mode(LogWatcher.Repo, {:shared, self()})
@@ -58,11 +62,11 @@ defmodule LogWatcher.DataCase do
   end
 
   @spec assert_script_started(term(), String.t()) :: {reference(), [term()]}
-  def assert_script_started(start_result, task_id) do
-    {:ok, %{task_id: job_task_id, status: status, message: message, task_ref: task_ref}} =
+  def assert_script_started(start_result, command_id) do
+    {:ok, %{command_id: job_task_id, status: status, message: message, task_ref: task_ref}} =
       start_result
 
-    assert job_task_id == task_id
+    assert job_task_id == command_id
     assert status == "running"
     assert String.contains?(message, "running on line")
     task_ref
@@ -72,14 +76,15 @@ defmodule LogWatcher.DataCase do
           {reference(), [term()]}
   def assert_script_errors(
         start_result,
-        task_id,
+        command_id,
         expected_categories,
         expected_status \\ "completed"
       ) do
-    {:ok, %{task_id: job_task_id, status: status, message: _message, task_ref: task_ref} = info} =
+    {:ok,
+     %{command_id: job_task_id, status: status, message: _message, task_ref: task_ref} = info} =
       start_result
 
-    assert job_task_id == task_id
+    assert job_task_id == command_id
     assert status == expected_status
     errors = get_in(info, [:result, :errors])
     assert !is_nil(errors)
@@ -93,22 +98,22 @@ defmodule LogWatcher.DataCase do
   @spec await_task(reference() | integer(), integer()) ::
           {:ok, term()} | {:error, :timeout}
   def await_task(task_ref, timeout) when is_reference(task_ref) do
-    _ = Logger.error("await_task task_ref #{inspect(task_ref)}")
-    result = ScriptServer.await(task_ref, timeout)
-    _ = Logger.error("await_task returned #{inspect(result)}")
+    _ = Logger.debug("await_task task_ref #{inspect(task_ref)}")
+    result = CommandManager.await(task_ref, timeout)
+    _ = Logger.debug("await_task returned #{inspect(result)}")
     result
   end
 
   def await_task(job_id, timeout) when is_integer(job_id) do
-    _ = Logger.error("await_task job #{job_id}")
-    result = ScriptServer.await(job_id, timeout)
-    _ = Logger.error("await_task returned #{inspect(result)}")
+    _ = Logger.debug("await_task job #{job_id}")
+    result = CommandManager.await(job_id, timeout)
+    _ = Logger.debug("await_task returned #{inspect(result)}")
     result
   end
 
   @spec await_os_process(integer(), integer()) :: :ok | {:error, :timeout}
   def await_os_process(os_pid, timeout) do
-    _ = Logger.error("await_os_process #{os_pid}")
+    _ = Logger.debug("await_os_process #{os_pid}")
     proc_file = "/proc/#{os_pid}"
 
     if File.exists?(proc_file) do
@@ -122,7 +127,7 @@ defmodule LogWatcher.DataCase do
   @spec wait_on_proc_file_until(String.t(), integer()) :: :ok | {:error, :timeout}
   def wait_on_proc_file_until(proc_file, expiry) do
     time_now = System.monotonic_time()
-    _ = Process.sleep(1)
+    _ = Process.sleep(100)
 
     if File.exists?(proc_file) do
       if time_now <= expiry do
@@ -134,4 +139,6 @@ defmodule LogWatcher.DataCase do
       :ok
     end
   end
+
+  def await_pipeline(), do: Process.sleep(100)
 end

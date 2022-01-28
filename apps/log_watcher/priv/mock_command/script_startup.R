@@ -9,12 +9,12 @@ source("json_logging.R")
 #' and sets up R session options used by the logging system.
 #'
 #' @return A named list with these components:
-#'  \code{log_path} The directory for argument and log files on the file system.
+#'  \code{log_dir} The directory for argument and log files on the file system.
 #'  \code{session_id} The session ID.
-#'  \code{task_id} The task (command) ID.
-#'  \code{task_type} The task type.
-#'  \code{gen} The generation number when the task is started.
-#'  \code{error} A non-empty string naming a phase if the task is to raise an
+#'  \code{command_id} The command (command) ID.
+#'  \code{command_name} The command name.
+#'  \code{gen} The generation number when the command is started.
+#'  \code{error} A non-empty string naming a phase if the command is to raise an
 #'      error (testing flag).
 start_script <- function() {
   # Used for logging--save important data in R options
@@ -33,10 +33,10 @@ start_script <- function() {
   p <- argparser::arg_parser("daptics rscript")
 
   # Add command line arguments. If not specified, missing args default to NA.
-  p <- argparser::add_argument(p, "--log-path", "path containing log file", short = "p")
+  p <- argparser::add_argument(p, "--log-dir", "directory containing log file", short = "p")
   p <- argparser::add_argument(p, "--session-id", "session id", short = "s")
-  p <- argparser::add_argument(p, "--task-id", "task id", short = "i")
-  p <- argparser::add_argument(p, "--task-type", "task id", short = "t")
+  p <- argparser::add_argument(p, "--command-id", "command id", short = "i")
+  p <- argparser::add_argument(p, "--command-name", "command name", short = "n")
   p <- argparser::add_argument(p, "--gen", "gen", short = "g", type = "integer")
   p <- argparser::add_argument(p, "--error", "phase in which to generate error result", short = "e", default = "none")
 
@@ -54,20 +54,20 @@ start_script <- function() {
     jcat("parsed script args\n")
   }
 
-  stopifnot(length(args$log_path) == 1)
+  stopifnot(length(args$log_dir) == 1)
   stopifnot(length(args$session_id) == 1)
-  stopifnot(length(args$task_id) == 1)
-  stopifnot(length(args$task_type) == 1)
+  stopifnot(length(args$command_id) == 1)
+  stopifnot(length(args$command_name) == 1)
   stopifnot(length(args$gen) == 1)
 
-  # Save session and task data in R options
+  # Save session and command data in R options
   context <- list(
     daptics_script_name = basename(pa$script),
-    daptics_session_log_path = args$log_path,
+    daptics_log_dir = args$log_dir,
     daptics_session_id = args$session_id,
-    daptics_task_id = args$task_id,
-    daptics_task_type = args$task_type,
-    daptics_task_gen = args$gen
+    daptics_command_id = args$command_id,
+    daptics_command_name = args$command_name,
+    daptics_command_gen = args$gen
   )
   options(context)
 

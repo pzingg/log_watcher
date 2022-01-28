@@ -1,9 +1,6 @@
 defmodule LogWatcher.FileWatcher do
   @moduledoc """
-  A GenServer that monitors a directory for file system changes,
-  and broadcasts progress over Elixir PubSub. The directory, called
-  the "session_log_path" is identified by a "session_id" that defines
-  the well-known PubSub topic, `session:session_id`.
+  A GenServer that monitors a directory for file system changes.
 
   Once started, clients of the server add individual files to be
   watched for file modifications using the Elixir `FileSystem`
@@ -15,42 +12,48 @@ defmodule LogWatcher.FileWatcher do
   If a file modification is detected, the server reads the new output
   from the stream, parses each JSON line, and broadcasts the parsed
   object on the PubSub session topic. A decoded line in the log file
-  is expected to be an Elixir map that includes a `:status` item.
+  is expected to be an Elixir map that includes `:message`, `:status`
+  and `:time` items.
+
   The `:status` value is expected to be a string with one of these values:
   "initializing" "created", "reading", "validating", "running",
   "cancelled" or "completed". If the `:status` item is missing,
   it will be set to "undefined".
 
-  A `:task_updated` message is sent for each line successfully parsed
+  A `:command_updated` message is sent for each line successfully parsed
   from the file being watched.
 
-  A `:task_started` message is sent for the first line that has a
+  A `:command_started` message is sent for the first line that has a
   status of "running", "cancelled" or "completed".
 
-  A `:task_completed` message is sent for each line that has a status
+  A `:command_completed` message is sent for each line that has a status
   of "cancelled" or "completed", but this is expected to happen
   at most one time.
-
-  The payload for each of these messages is the file name (without
-  the path) that produced the change, and the map that was parsed,
-  containing at a minimum the `:session_id` and `:status` items.
   """
-  use GenServer
+  use GenServer, restart: :transient
 
   require Logger
 
-  alias LogWatcher.Tasks.Session
+  alias LogWatcher.ScriptRunner
 
   defmodule WatchedFile do
-    @enforce_keys [:stream]
+    @moduledoc false
 
-    defstruct stream: nil,
+    @enforce_keys [:session_id, :command_id, :file_name, :stream]
+
+    defstruct session_id: nil,
+              command_id: nil,
+              file_name: nil,
+              stream: nil,
               position: 0,
               size: 0,
               last_modified: 0,
               start_sent: false
 
     @type t :: %__MODULE__{
+            session_id: String.t(),
+            command_id: String.t(),
+            file_name: String.t(),
             stream: File.Stream.t(),
             position: integer(),
             size: integer(),
@@ -61,132 +64,119 @@ defmodule LogWatcher.FileWatcher do
     @doc """
     Construct a `LogWatcher.WatchedFile` struct for a directory and file name.
     """
-    @spec new(String.t(), String.t()) :: t()
-    def new(dir, file_name) do
-      path = Path.join(dir, file_name)
-      %__MODULE__{stream: File.stream!(path)}
+    @spec new(String.t(), String.t(), String.t()) :: t()
+    def new(session_id, command_id, path) do
+      %__MODULE__{
+        session_id: session_id,
+        command_id: command_id,
+        file_name: Path.basename(path),
+        stream: File.stream!(path)
+      }
     end
   end
 
   defimpl String.Chars, for: LogWatcher.FileWatcher.WatchedFile do
     def to_string(%WatchedFile{stream: stream, position: position, start_sent: start_sent}) do
-      "%LogWatcher.FileWatcher.WatchedFile{stream: #{stream.path}, position: #{position}, start_sent: #{
-        start_sent
-      }}"
+      "%LogWatcher.FileWatcher.WatchedFile{stream: #{stream.path}, position: #{position}, start_sent: #{start_sent}}"
     end
   end
 
-  @enforce_keys [:fs_pid, :session_id, :session_log_path]
+  @enforce_keys [:fs_pid, :log_dir]
 
   defstruct fs_pid: nil,
-            session_id: nil,
-            session_log_path: nil,
+            log_dir: nil,
+            in_cleanup: false,
             files: %{}
 
   @type state() :: %__MODULE__{
           fs_pid: pid(),
-          session_id: String.t(),
-          session_log_path: String.t(),
+          log_dir: String.t(),
+          in_cleanup: boolean(),
           files: map()
         }
 
-  @type gproc_key :: {:n, :l, {:session_id, String.t()}}
+  @type gproc_key :: {:n, :l, {:watch_dir, String.t()}}
 
-  @task_started_status ["running", "cancelled", "completed"]
+  @command_started_status ["running", "cancelled", "completed"]
 
-  @task_completed_status ["cancelled", "completed"]
+  @command_completed_status ["cancelled", "completed"]
 
   @doc """
   Public interface. Start the GenServer for a session.
   """
-  @spec start_link(Keyword.t()) :: GenServer.on_start()
-  def start_link(opts) do
-    session_id = Keyword.fetch!(opts, :session_id)
-    session_log_path = Keyword.fetch!(opts, :session_log_path)
-    _ = Logger.info("FileWatcher start_link #{session_id} #{session_log_path}")
-    GenServer.start_link(__MODULE__, [session_id, session_log_path], name: via_tuple(session_id))
+  @spec start_link(String.t()) :: GenServer.on_start()
+  def start_link(log_dir) when is_binary(log_dir) do
+    GenServer.start_link(__MODULE__, log_dir, name: via_tuple(log_dir))
+  end
+
+  def start_link(_arg), do: {:error, :badarg}
+
+  @doc false
+  def kill(log_dir) do
+    GenServer.call(via_tuple(log_dir), :kill)
+  end
+
+  @doc false
+  def watch(log_dir, session_id, command_id, file_name) do
+    GenServer.call(via_tuple(log_dir), {:watch, session_id, command_id, file_name})
+  end
+
+  @doc false
+  def unwatch(log_dir, file_name, cleanup \\ false) do
+    GenServer.call(via_tuple(log_dir), {:unwatch, file_name, cleanup})
   end
 
   @doc """
-  Public interface. Sends a call to kill the GenServer.
-  """
-  @spec stop(String.t()) :: :ok
-  def stop(session_id) do
-    GenServer.call(via_tuple(session_id), :kill)
-  end
-
-  @doc """
-  Public interface. Add a file to the watch list.
-  """
-  @spec add_watch(String.t(), String.t()) :: {:ok, String.t()}
-  def add_watch(session_id, file_name) do
-    _ = Logger.info("FileWatcher add_watch #{session_id} #{file_name}")
-    GenServer.call(via_tuple(session_id), {:add_watch, file_name})
-  end
-
-  @doc """
-  Public interface. Remove a file from the watch list.
-  """
-  @spec remove_watch(String.t(), String.t()) :: {:ok, String.t()}
-  def remove_watch(session_id, file_name) do
-    GenServer.call(via_tuple(session_id), {:remove_watch, file_name})
-  end
-
-  @doc """
-  Public interface. Return the :via tuple for this server.
+  Return the :via tuple for this server.
   """
   @spec via_tuple(String.t()) :: {:via, :gproc, gproc_key()}
-  def via_tuple(session_id) do
-    {:via, :gproc, registry_key(session_id)}
+  def via_tuple(log_dir) do
+    {:via, :gproc, registry_key(log_dir)}
   end
 
   @doc """
-  Public interface. Return the pid for a server.
+  Return the pid for a server.
   """
-  @spec registered(String.t()) :: pid() | :undefined
-  def registered(session_id) do
-    :gproc.where(registry_key(session_id))
+  @spec whereis(String.t()) :: pid() | :undefined
+  def whereis(log_dir) do
+    :gproc.where(registry_key(log_dir))
   end
 
-  @doc """
-  Public interface. Return the key used to register a server.
-  """
-  @spec registry_key(String.t()) :: gproc_key()
-  def registry_key(session_id) do
-    {:n, :l, {:session_id, session_id}}
-  end
+  # Callbacks
 
   @doc false
   @impl true
   @spec init(term()) :: {:ok, state()}
-  def init([session_id, session_log_path]) do
-    _ = Logger.info("FileWatcher init #{session_id} #{session_log_path}")
+  def init(log_dir) do
+    _ = Logger.debug("FileWatcher init #{log_dir}")
 
-    args = [dirs: [session_log_path], recursive: false]
-    _ = Logger.info("FileWatcher start FileSystem link with #{inspect(args)}")
+    # Trap exits so we terminate if parent dies
+    _ = Process.flag(:trap_exit, true)
+
+    args = [dirs: [log_dir], recursive: false]
+    _ = Logger.debug("FileWatcher start FileSystem link with #{inspect(args)}")
 
     {:ok, fs_pid} = FileSystem.start_link(args)
     FileSystem.subscribe(fs_pid)
 
     initial_state = %__MODULE__{
       fs_pid: fs_pid,
-      session_id: session_id,
-      session_log_path: session_log_path
+      log_dir: log_dir
     }
 
     {:ok, initial_state}
   end
 
   # events: {#PID<0.319.0>,
-  # "priv/mock_task/output/T10-create-003-log.jsonl",
+  # "priv/mock_command/output/T10-create-003-log.jsonl",
   # [:created]}
 
   # events: {#PID<0.319.0>,
-  # "priv/mock_task/output/T10-create-003-log.jsonl",
+  # "priv/mock_command/output/T10-create-003-log.jsonl",
   # [:modified]}
 
   # events: {#PID<0.319.0>,
-  # "priv/mock_task/output/T10-create-003-log.jsonl",
+  # "priv/mock_command/output/T10-create-003-log.jsonl",
   # [:modified, :closed]}
 
   @doc false
@@ -200,36 +190,53 @@ defmodule LogWatcher.FileWatcher do
     {:stop, :normal, :ok, next_state}
   end
 
-  def handle_call(
-        {:add_watch, file_name},
-        _from,
-        %__MODULE__{session_id: session_id, session_log_path: session_log_path, files: files} =
-          state
-      ) do
-    file = WatchedFile.new(session_log_path, file_name)
-    next_file = check_for_lines(session_id, file)
-    _ = Logger.info("FileWatcher watch added for #{file_name}")
-    next_state = %__MODULE__{state | files: Map.put_new(files, file_name, next_file)}
-    {:reply, {:ok, file_name}, next_state}
+  def handle_call({:watch, _, _, _}, _from, %__MODULE__{in_cleanup: true} = state) do
+    {:reply, {:error, :in_cleanup}, state}
   end
 
-  @doc false
   def handle_call(
-        {:remove_watch, file_name},
+        {:watch, session_id, command_id, file_name},
         _from,
-        %__MODULE__{session_id: session_id, files: files} = state
+        %__MODULE__{log_dir: log_dir, files: files} = state
       ) do
-    next_state =
-      case Map.get(files, file_name) do
-        %WatchedFile{} = file ->
-          _ = check_for_lines(session_id, file)
-          %__MODULE__{state | files: Map.drop(files, file_name)}
+    if Map.get(files, file_name) do
+      {:reply, {:error, :already_watching}, state}
+    else
+      file = WatchedFile.new(session_id, command_id, Path.join(log_dir, file_name))
+      file = check_for_lines(file)
+      _ = Logger.debug("FileWatcher watch added for #{file_name}")
+      state = %__MODULE__{state | files: Map.put_new(files, file_name, file)}
+      {:reply, :ok, state}
+    end
+  end
 
-        _ ->
-          state
+  def handle_call({:unwatch, _, _}, _from, %__MODULE__{in_cleanup: true} = state) do
+    {:reply, {:error, :in_cleanup}, state}
+  end
+
+  def handle_call(
+        {:unwatch, file_name, cleanup},
+        _from,
+        %__MODULE__{files: files} = state
+      ) do
+    {reply, state} =
+      case Map.get(files, file_name) do
+        nil ->
+          {{:error, :not_found}, state}
+
+        %WatchedFile{} = file ->
+          _ = check_for_lines(file)
+          files = Map.delete(files, file_name)
+
+          if cleanup && Enum.empty?(files) do
+            send(self(), :cleanup)
+            {{:ok, :gone}, %__MODULE__{state | files: files, in_cleanup: true}}
+          else
+            {{:ok, :more}, %__MODULE__{state | files: files}}
+          end
       end
 
-    {:reply, {:ok, file_name}, next_state}
+    {:reply, reply, state}
   end
 
   @doc false
@@ -237,9 +244,9 @@ defmodule LogWatcher.FileWatcher do
   @spec handle_info(term(), state()) :: {:noreply, state()} | {:stop, :normal, state()}
   def handle_info(
         {:file_event, fs_pid, {path, events}},
-        %__MODULE__{fs_pid: fs_pid, session_id: session_id, files: files} = state
+        %__MODULE__{fs_pid: fs_pid, files: files} = state
       ) do
-    # Logger.info("FileWatcher #{inspect(fs_pid)} #{path}: #{inspect(events)}")
+    # Logger.debug("FileWatcher #{inspect(fs_pid)} #{path}: #{inspect(events)}")
 
     file_name = Path.basename(path)
 
@@ -250,7 +257,7 @@ defmodule LogWatcher.FileWatcher do
       %WatchedFile{} = file ->
         next_state =
           if Enum.member?(events, :modified) do
-            next_file = check_for_lines(session_id, file)
+            next_file = check_for_lines(file)
             %__MODULE__{state | files: Map.put(files, file_name, next_file)}
           else
             state
@@ -262,24 +269,50 @@ defmodule LogWatcher.FileWatcher do
 
   def handle_info(
         {:file_event, fs_pid, :stop},
-        %__MODULE__{fs_pid: fs_pid} = state
+        %__MODULE__{log_dir: log_dir, fs_pid: fs_pid} = state
       ) do
-    _ = Logger.info("FileWatcher #{inspect(fs_pid)} :stop")
+    _ = Logger.debug("FileWatcher #{String.slice(log_dir, -20..-1)} :file_event :stop => :stop")
     {:stop, :normal, state}
   end
 
+  def handle_info(:cleanup, %__MODULE__{log_dir: log_dir} = state) do
+    _ = Logger.debug("FileWatcher #{String.slice(log_dir, -20..-1)} cleanup => :stop")
+    {:stop, :normal, state}
+  end
+
+  def handle_info(unexpected, %__MODULE__{log_dir: log_dir} = state) do
+    _ =
+      Logger.debug(
+        "FileWatcher #{String.slice(log_dir, -20..-1)} unexpected #{inspect(unexpected)} => :stop"
+      )
+
+    {:stop, :normal, state}
+  end
+
+  @doc false
+  @impl true
+  def terminate(reason, %__MODULE__{log_dir: log_dir}) do
+    _ = Logger.debug("FileWatcher #{String.slice(log_dir, -20..-1)} terminate #{reason}")
+  end
+
+  # Private functions
+
+  @spec registry_key(String.t()) :: gproc_key()
+  defp registry_key(log_dir) do
+    {:n, :l, {:watch_dir, log_dir}}
+  end
+
   @spec check_all_files(state()) :: map()
-  defp check_all_files(%__MODULE__{session_id: session_id, files: files}) do
+  defp check_all_files(%__MODULE__{files: files}) do
     Enum.map(files, fn {file_name, file} ->
-      next_file = check_for_lines(session_id, file)
+      next_file = check_for_lines(file)
       {file_name, next_file}
     end)
     |> Enum.into(%{})
   end
 
-  @spec check_for_lines(String.t(), WatchedFile.t()) :: WatchedFile.t()
+  @spec check_for_lines(WatchedFile.t()) :: WatchedFile.t()
   defp check_for_lines(
-         session_id,
          %WatchedFile{
            stream: stream,
            position: position,
@@ -304,68 +337,76 @@ defmodule LogWatcher.FileWatcher do
           last_modified: stat.mtime
       }
 
-      handle_lines(session_id, next_file, lines)
+      handle_lines(next_file, lines)
     else
       {:exists, _} ->
-        # Logger.error("FileWatcher #{stream.path} does not exist")
+        # Logger.debug("FileWatcher #{stream.path} does not exist")
         %WatchedFile{file | stream: File.stream!(stream.path), position: 0, size: 0}
 
       {:size, _} ->
-        _ = Logger.error("FileWatcher no increase in size")
+        _ = Logger.debug("FileWatcher no increase in size")
         %WatchedFile{file | stream: File.stream!(stream.path), position: 0, size: 0}
 
       # {:mtime, _} ->
-      #  Logger.error("FileWatcher no change in mtime")
+      #  _ = Logger.debug("FileWatcher no change in mtime")
       #  file
 
       {:error, reason} ->
-        _ = Logger.error("FileWatcher cannot stat #{stream.path}: #{inspect(reason)}")
+        _ = Logger.debug("FileWatcher cannot stat #{stream.path}: #{inspect(reason)}")
         %WatchedFile{file | stream: File.stream!(stream.path), position: 0, size: 0}
     end
   end
 
-  @spec handle_lines(String.t(), WatchedFile.t(), [String.t()]) :: WatchedFile.t()
-  defp handle_lines(_session_id, %WatchedFile{} = file, []), do: file
+  @spec handle_lines(WatchedFile.t(), [String.t()]) :: WatchedFile.t()
+  defp handle_lines(%WatchedFile{} = file, []), do: file
 
-  defp handle_lines(session_id, %WatchedFile{stream: stream} = file, lines) do
-    file_name = Path.basename(stream.path)
-
-    _ = Logger.info("FileWatcher got #{Enum.count(lines)} line(s) from #{file_name}")
+  defp handle_lines(%WatchedFile{file_name: file_name} = file, lines) do
+    _ = Logger.debug("FileWatcher got #{Enum.count(lines)} line(s) from #{file_name}")
 
     Enum.reduce(lines, file, fn line, acc ->
-      broadcast_changes(session_id, file_name, line, acc)
+      report_changes(line, acc)
     end)
   end
 
-  @spec broadcast_changes(String.t(), String.t(), String.t(), WatchedFile.t()) :: WatchedFile.t()
-  defp broadcast_changes(session_id, file_name, line, %WatchedFile{start_sent: start_sent} = file) do
+  @spec report_changes(String.t(), WatchedFile.t()) :: WatchedFile.t()
+  defp report_changes(
+         line,
+         %WatchedFile{
+           session_id: session_id,
+           command_id: command_id,
+           file_name: file_name,
+           start_sent: start_sent
+         } = file
+       ) do
     case Jason.decode(line, keys: :atoms) do
       {:ok, data} when is_map(data) ->
         info =
           data
           |> Map.put_new(:session_id, session_id)
+          |> Map.put_new(:command_id, command_id)
           |> Map.put_new(:status, "undefined")
+          |> Map.put_new(:file_name, file_name)
 
-        topic = Session.events_topic(info.session_id)
+        _ = ScriptRunner.send_event(command_id, :command_updated, info)
 
-        Session.broadcast(topic, {:task_updated, file_name, info})
-
+        # :command_started is only sent after we have validated.
+        # It will cause the ScriptRunner to exit the message loop and return.
         next_file =
-          if !start_sent && Enum.member?(@task_started_status, info.status) do
-            Session.broadcast(topic, {:task_started, file_name, info})
+          if !start_sent && Enum.member?(@command_started_status, info.status) do
+            _ = ScriptRunner.send_event(command_id, :command_started, info)
             %WatchedFile{file | start_sent: true}
           else
             file
           end
 
-        if Enum.member?(@task_completed_status, info.status) do
-          Session.broadcast(topic, {:task_completed, file_name, info})
+        if Enum.member?(@command_completed_status, info.status) do
+          _ = ScriptRunner.send_event(command_id, :command_completed, info)
         end
 
         next_file
 
       _ ->
-        _ = Logger.error("FileWatcher, ignoring non-JSON: #{line}")
+        _ = Logger.debug("FileWatcher, ignoring non-JSON: #{line}")
         file
     end
   end
