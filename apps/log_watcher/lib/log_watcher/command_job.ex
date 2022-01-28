@@ -68,8 +68,8 @@ defmodule LogWatcher.CommandJob do
         gen_arg
       end
 
-    _ = Logger.error("perform job #{job_id} command_id #{command_id}")
-    _ = Logger.error("worker pid is #{inspect(self())}")
+    _ = Logger.debug("perform job #{job_id} command_id #{command_id}")
+    _ = Logger.debug("worker pid is #{inspect(self())}")
 
     session = Sessions.get_session!(session_id)
 
@@ -87,7 +87,7 @@ defmodule LogWatcher.CommandJob do
   end
 
   def perform(%Oban.Job{id: job_id, args: args}) do
-    _ = Logger.error("perform job #{job_id} some args are missing: #{inspect(args)}")
+    _ = Logger.debug("perform job #{job_id} some args are missing: #{inspect(args)}")
     {:discard, "Not a command job"}
   end
 end

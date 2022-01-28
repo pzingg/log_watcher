@@ -172,7 +172,7 @@ defmodule LogWatcher.Commands do
 
       params =
         if file_name_params["session_id"] != session_id do
-          Logger.error("session_id in log file name does not match session")
+          _ = Logger.debug("session_id in log file name does not match session")
           Map.put(file_name_params, "session_id", session_id)
         else
           file_name_params

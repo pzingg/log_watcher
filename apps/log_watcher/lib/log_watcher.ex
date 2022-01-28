@@ -49,10 +49,10 @@ defmodule LogWatcher do
     errors = Translations.changeset_error_messages(changeset) |> Enum.join(" ")
 
     message =
-      if !is_nil(id_value) do
-        "#{label} (id: #{id_value}): #{errors}"
-      else
+      if is_nil(id_value) do
         "#{label}: #{errors}"
+      else
+        "#{label} (id: #{id_value}): #{errors}"
       end
 
     raise InputError, message

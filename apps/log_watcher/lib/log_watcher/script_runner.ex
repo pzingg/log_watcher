@@ -1,6 +1,23 @@
 defmodule LogWatcher.ScriptRunner do
   @moduledoc """
-  A GenServer that runs scripts.
+  A GenServer that runs an OS shell script as a long-running Elixir
+  Task. Before starting the task, the arguments that the script
+  will use is written to a JSON-formatted file in the `log_dir`
+  for the script, and a FileWatcher is set to watch for changes
+  in a (JSONL-formatted) log file that the script will write to.
+
+  The well-known names of the arg file and the log file are made
+  by concatenating `session_id`, `gen`, `command_name` and
+  `command_id` strings.
+
+  The `run_script` method will return a reply when the script
+  has "started" (or failed to start), meaning that the OS shell
+  process has been created, the script has read any arguments
+  and validated them, and has appended a log line with a
+  status value of "running", "cancelled" or "completed".
+
+  See the FileWatcher module documentation for more
+  information on expectations for log file output.
   """
   use GenServer, restart: :transient
 
@@ -21,7 +38,7 @@ defmodule LogWatcher.ScriptRunner do
             job_id: 0,
             os_pid: 0,
             last_update: %{},
-            await_start: false,
+            await_running: false,
             sigint_pending: false,
             task: nil,
             awaiting_start: nil,
@@ -39,7 +56,7 @@ defmodule LogWatcher.ScriptRunner do
           job_id: integer(),
           os_pid: integer(),
           last_update: map(),
-          await_start: boolean(),
+          await_running: boolean(),
           sigint_pending: boolean(),
           task: Task.t() | nil,
           awaiting_start: GenServer.from() | nil,
@@ -58,24 +75,53 @@ defmodule LogWatcher.ScriptRunner do
 
   # Public interface
 
+  @doc """
+  Sets up a process to run a script. The argument is a map with
+  these items:
+
+  * `:session` - a Session struct (or map with at least `:id`,
+    `:log_dir`, and `gen` members)
+  * `:command_id`
+  * `:command_name`
+  * `:command_args` - a map of arguments that are passed to
+    the OS shell, that must include a `:script_path` item that
+    gives the full path to the .R or .py script to be
+    executed.
+  """
   def start_link(%{command_id: command_id} = arg) do
     GenServer.start_link(__MODULE__, arg, name: via_tuple(command_id))
   end
 
   def start_link(_arg), do: {:error, :badarg}
 
-  def run_script(command_id, script_path, start_args) do
-    GenServer.call(via_tuple(command_id), {:run_script, script_path, start_args})
+  @doc """
+  Prepares the FileWatcher and runs the script (an .R or .py file) as
+  an Elixir Task. The process will then receive events from the FileWatcher
+  to update its state.
+  """
+  def run_script(command_id, await_running \\ true) do
+    GenServer.call(via_tuple(command_id), {:run_script, await_running})
   end
 
+  @doc """
+  Returns `{:ok, :command_exit}` when the Elixir Task has completed, or
+  `{:error, timeout}` if the timeout (in milliseconds) has been exceeded.
+  """
   def await_exit(command_id, timeout) when is_integer(timeout) do
     GenServer.call(via_tuple(command_id), {:await, :command_exit, timeout}, timeout + 1000)
   end
 
+  @doc """
+  Sends an OS SIGINT signal to the shell process. The .R or .py script is
+  expected to clean up and exit on receipt of the SIGINT.
+  """
   def cancel(command_id) do
     GenServer.call(via_tuple(command_id), :cancel)
   end
 
+  @doc """
+  Stops monitoring the long-running task as
+  """
   def kill(command_id) do
     GenServer.call(via_tuple(command_id), :kill)
   end
@@ -150,7 +196,7 @@ defmodule LogWatcher.ScriptRunner do
   @doc false
   @impl true
   def handle_call(
-        {:run_script, await_start},
+        {:run_script, await_running},
         from,
         %__MODULE__{
           session_id: session_id,
@@ -167,10 +213,10 @@ defmodule LogWatcher.ScriptRunner do
     send(self(), {:start_script_task, from})
 
     # We will return the reply after the script has started or terminated.
-    {:noreply, %__MODULE__{state | await_start: await_start}}
+    {:noreply, %__MODULE__{state | await_running: await_running}}
   end
 
-  def handle_call({:run_script, _await_start}, _from, state) do
+  def handle_call({:run_script, _await_running}, _from, state) do
     {:reply, {:error, :already_running}, state}
   end
 
@@ -184,17 +230,20 @@ defmodule LogWatcher.ScriptRunner do
     {:reply, reply, state}
   end
 
-  def handle_call(:kill, _from, state) do
-    state =
-      maybe_send_reply(
-        state,
-        {:error, :shutdown_requested},
-        fail_silently: true,
-        log_message: "shutdown already requested"
-      )
+  def handle_call(:kill, _from, %__MODULE__{command_id: command_id} = state) do
+    _ = Logger.debug("ScriptRunner #{command_id} kill requested => stop")
 
-    {reply, state} = shutdown_and_remove_task(state)
-    {:reply, reply, state}
+    {_reply, state} =
+      state
+      |> maybe_send_reply(
+        {:error, :kill_requested},
+        fail_silently: true,
+        log_message: "kill requested"
+      )
+      |> reply_to_all_waiters(:kill_requested)
+      |> shutdown_and_remove_task()
+
+    {:stop, :normal, :ok, state}
   end
 
   @doc false
@@ -225,7 +274,7 @@ defmodule LogWatcher.ScriptRunner do
         {task_ref, result},
         %__MODULE__{command_id: command_id, task: %Task{ref: task_ref}} = state
       ) do
-    _ = Logger.info("ScriptRunner #{command_id} received command result")
+    _ = Logger.debug("ScriptRunner #{command_id} received command result")
 
     state =
       maybe_send_reply(state, {:error, {:command_result, result}}, log_message: "command result")
@@ -235,55 +284,33 @@ defmodule LogWatcher.ScriptRunner do
 
   def handle_info(
         {:DOWN, task_ref, :process, _pid, reason},
-        %__MODULE__{command_id: command_id, task: %Task{ref: task_ref}, other_waiters: waiters} =
-          state
+        %__MODULE__{command_id: command_id, task: %Task{ref: task_ref}} = state
       ) do
-    _ = Logger.info("ScriptRunner #{command_id} received command exit #{reason}")
+    _ = Logger.debug("ScriptRunner #{command_id} received command exit #{reason}")
 
     # Will only send this if :command_result was never sent.
     state =
-      maybe_send_reply(%__MODULE__{state | task: nil}, {:error, {:command_exit, reason}},
+      %__MODULE__{state | task: nil}
+      |> maybe_send_reply({:error, {:command_exit, reason}},
         log_message: "command exit #{reason}"
       )
+      |> reply_to_all_waiters(:command_exit)
 
-    # If anyone else was waiting...
-    for {_wait_type, from} <- waiters do
-      GenServer.reply(from, {:ok, :command_exit})
-    end
-
-    {:stop, :normal, %__MODULE__{state | task: nil, other_waiters: []}}
-  end
-
-  def handle_info({:DOWN, ref, pid, reason}, %__MODULE__{command_id: command_id} = state) do
-    Logger.error("ScriptRunner #{command_id} :DOWN #{inspect(ref)} #{inspect(pid)} #{reason}")
-
-    # TODO: return {:stop, :normal, state}
-    {:noreply, state}
-  end
-
-  def handle_info({:EXIT, pid, reason}, %__MODULE__{command_id: command_id} = state) do
-    _ = Logger.info("ScriptRunner #{command_id} :EXIT #{inspect(pid)} #{reason}")
-    {_, state} = do_cancel(state)
-
-    state =
-      maybe_send_reply(state, {:error, reason}, log_message: ":EXIT #{inspect(pid)} #{reason}")
-
-    # TODO: return {:stop, :normal, state}
-    {:noreply, state}
+    {:stop, :normal, state}
   end
 
   def handle_info(unexpected, %__MODULE__{command_id: command_id} = state) do
-    _ = Logger.error("ScriptRunner #{command_id} unexpected #{inspect(unexpected)}")
+    _ = Logger.debug("ScriptRunner #{command_id} unexpected #{inspect(unexpected)}")
     state = maybe_send_reply(state, {:error, :unimplemented}, log_message: "unexpected")
 
-    # TODO: return {:stop, :normal, state}
+    # Maybe return {:stop, :normal, state}?
     {:noreply, state}
   end
 
   @doc false
   @impl true
   def terminate(reason, %__MODULE__{command_id: command_id} = state) do
-    _ = Logger.error("ScriptRunner #{command_id} terminate #{reason}")
+    _ = Logger.debug("ScriptRunner #{command_id} terminate #{reason}")
     log_path = get_log_path(state)
     FileWatcherManager.unwatch(log_path, true)
 
@@ -291,6 +318,15 @@ defmodule LogWatcher.ScriptRunner do
   end
 
   # Private functions
+
+  defp reply_to_all_waiters(%__MODULE__{other_waiters: waiters} = state, wait_type) do
+    # If anyone else was waiting...
+    for {_wait_type, from} <- waiters do
+      GenServer.reply(from, {:ok, wait_type})
+    end
+
+    %__MODULE__{state | other_waiters: []}
+  end
 
   @spec registry_key(String.t()) :: gproc_key()
   defp registry_key(command_id) do
@@ -320,7 +356,7 @@ defmodule LogWatcher.ScriptRunner do
   defp write_start_args(%__MODULE__{command_id: command_id} = state, start_args) do
     arg_path = get_arg_path(state)
 
-    _ = Logger.info("ScriptRunner #{command_id}: write arg file to #{arg_path}")
+    _ = Logger.debug("ScriptRunner #{command_id}: write arg file to #{arg_path}")
 
     Commands.write_arg_file(arg_path, start_args)
   end
@@ -359,7 +395,8 @@ defmodule LogWatcher.ScriptRunner do
          } = state
        ) do
     _ =
-      Logger.info(
+      _ =
+      Logger.debug(
         "ScriptRunner #{command_id} run_script #{script_path} with #{inspect(script_args)}"
       )
 
@@ -401,15 +438,16 @@ defmodule LogWatcher.ScriptRunner do
         ] ++ optional_args(script_args, [:error, :cancel])
 
       _ =
-        Logger.info(
+        _ =
+        Logger.debug(
           "ScriptRunner #{command_id} shelling out to #{executable} with args #{inspect(shell_args)}"
         )
 
       {output, exit_status} =
         System.cmd(executable, [script_path | shell_args], cd: Path.dirname(script_path))
 
-      _ = Logger.info("ScriptRunner #{command_id} script exited with #{exit_status}")
-      _ = Logger.info("ScriptRunner #{command_id} output from script: #{inspect(output)}")
+      _ = Logger.debug("ScriptRunner #{command_id} script exited with #{exit_status}")
+      _ = Logger.debug("ScriptRunner #{command_id} output from script: #{inspect(output)}")
 
       data =
         data
@@ -437,9 +475,9 @@ defmodule LogWatcher.ScriptRunner do
 
   defp handle_command_event(
          %{event_type: event_type} = event,
-         %__MODULE__{command_id: command_id, task: task, await_start: await_start} = state
+         %__MODULE__{command_id: command_id, task: task, await_running: await_running} = state
        ) do
-    _ = Logger.info("ScriptRunner #{command_id} received #{event_type}")
+    _ = Logger.debug("ScriptRunner #{command_id} received #{event_type}")
 
     # Include task information in event
     event = add_task_info(event, task)
@@ -454,7 +492,7 @@ defmodule LogWatcher.ScriptRunner do
       end
 
     state =
-      if event_type == :command_updated && await_start do
+      if event_type == :command_updated && await_running do
         state
       else
         # :command_started, :command_result
@@ -502,7 +540,8 @@ defmodule LogWatcher.ScriptRunner do
        ) do
     if status == cancel do
       _ =
-        Logger.error(
+        _ =
+        Logger.debug(
           "ScriptRunner #{command_id}: cancelling script, last status read was #{status}"
         )
 
@@ -536,10 +575,10 @@ defmodule LogWatcher.ScriptRunner do
   @spec do_cancel(state()) :: {:pending | :ok, state()}
   defp do_cancel(%__MODULE__{command_id: command_id, os_pid: os_pid} = state) do
     if is_nil(os_pid) do
-      _ = Logger.info("ScriptRunner #{command_id} set sigint_pending")
+      _ = Logger.debug("ScriptRunner #{command_id} set sigint_pending")
       {:pending, %__MODULE__{state | sigint_pending: true}}
     else
-      _ = Logger.error("ScriptRunner #{command_id} sending \"kill -s INT\" to #{os_pid}")
+      _ = Logger.debug("ScriptRunner #{command_id} sending \"kill -s INT\" to #{os_pid}")
       _ = System.cmd("kill", ["-s", "INT", to_string(os_pid)])
       {:ok, %__MODULE__{state | sigint_pending: false, os_pid: 0}}
     end
@@ -555,7 +594,7 @@ defmodule LogWatcher.ScriptRunner do
     log_message = Keyword.get(opts, :log_message)
 
     if !fail_silently && !is_nil(log_message) do
-      _ = Logger.error("ScriptRunner #{command_id} no_client for #{log_message}")
+      _ = Logger.debug("ScriptRunner #{command_id} no_client for #{log_message}")
     end
 
     state
@@ -570,7 +609,8 @@ defmodule LogWatcher.ScriptRunner do
 
     if !is_nil(log_message) do
       _ =
-        Logger.error("ScriptRunner #{command_id} #{log_message} sending reply #{inspect(reply)}")
+        _ =
+        Logger.debug("ScriptRunner #{command_id} #{log_message} sending reply #{inspect(reply)}")
     end
 
     _ = GenServer.reply(from, reply)
@@ -588,11 +628,11 @@ defmodule LogWatcher.ScriptRunner do
 
     reply =
       if Process.alive?(task_pid) do
-        _ = Logger.error("ScriptRunner #{command_id} shutting down pid #{inspect(task_pid)}")
+        _ = Logger.debug("ScriptRunner #{command_id} shutting down pid #{inspect(task_pid)}")
         _ = Process.exit(task_pid, :shutdown)
         :ok
       else
-        _ = Logger.error("ScriptRunner #{command_id} kill #{inspect(task_pid)} already dead")
+        _ = Logger.debug("ScriptRunner #{command_id} kill #{inspect(task_pid)} already dead")
         {:error, :noproc}
       end
 
@@ -605,7 +645,7 @@ defmodule LogWatcher.ScriptRunner do
   defp demonitor_and_remove_task(
          %__MODULE__{command_id: command_id, task: %Task{ref: task_ref}} = state
        ) do
-    _ = Logger.error("ScriptRunner  #{command_id} remove_task #{inspect(task_ref)}")
+    _ = Logger.debug("ScriptRunner  #{command_id} remove_task #{inspect(task_ref)}")
     _ = Process.demonitor(task_ref, [:flush])
 
     %__MODULE__{state | task: nil}

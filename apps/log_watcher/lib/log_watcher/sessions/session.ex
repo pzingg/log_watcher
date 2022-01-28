@@ -7,6 +7,7 @@ defmodule LogWatcher.Sessions.Session do
   (usually a UUID or ULID).
   """
   use Ecto.Schema
+
   import Ecto.Changeset
 
   require Logger
@@ -55,7 +56,7 @@ defmodule LogWatcher.Sessions.Session do
 
   @spec subscribe(String.t()) :: :ok | {:error, term()}
   def subscribe(topic) do
-    _ = Logger.info("#{inspect(self())} subscribing to #{topic}")
+    _ = Logger.debug("#{inspect(self())} subscribing to #{topic}")
     Phoenix.PubSub.subscribe(LogWatcher.PubSub, topic)
   end
 

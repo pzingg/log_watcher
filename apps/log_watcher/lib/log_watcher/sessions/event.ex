@@ -3,6 +3,7 @@ defmodule LogWatcher.Sessions.Event do
   Structure and type for Event model.
   """
   use Ecto.Schema
+
   import Ecto.Changeset
 
   alias LogWatcher.Sessions.Session

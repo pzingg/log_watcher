@@ -16,11 +16,11 @@ defmodule LogWatcher.Pipeline.Handler do
         GenStage.call(producer, {:notify, broadway_message}, timeout)
 
       [] ->
-        Logger.error("sync_notify: no producer to notify")
+        _ = Logger.debug("sync_notify: no producer to notify")
         {:error, :no_producer}
 
       _ ->
-        Logger.error("sync_notify: too many producers")
+        _ = Logger.debug("sync_notify: too many producers")
         {:error, :more_than_one_producer}
     end
   end
@@ -49,7 +49,7 @@ defmodule LogWatcher.Pipeline.Handler do
         _ = Phoenix.PubSub.broadcast(LogWatcher.PubSub, event.topic, event)
 
       {:error, changeset} ->
-        _ = Logger.error("Failed to insert event #{inspect(changeset.errors)}")
+        _ = Logger.debug("Failed to insert event #{inspect(changeset.errors)}")
     end
 
     data

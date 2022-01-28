@@ -1,7 +1,9 @@
 defmodule LogWatcher.FileWatcherManager do
   @moduledoc """
-  Supervisor that can start and link a `FileWatcher` GenServer
-  for a given directory.
+  Maintains a list of the filesystem directories that
+  are being watched by a FileWatcher process, and forwards
+  client `watch` and `unwatch` requests to the approprate
+  FileWatcher.
   """
   use GenServer
 
@@ -65,24 +67,24 @@ defmodule LogWatcher.FileWatcherManager do
   @doc false
   @impl true
   def handle_info({:DOWN, ref, pid, reason}, state) do
-    Logger.error("FileWatcherManager :DOWN #{inspect(ref)} #{inspect(pid)} #{reason}")
+    _ = Logger.debug("FileWatcherManager :DOWN #{inspect(ref)} #{inspect(pid)} #{reason}")
     {:noreply, state}
   end
 
   def handle_info({:EXIT, pid, reason}, state) do
-    Logger.error("FileWatcherManager :EXIT #{inspect(pid)} #{reason}")
+    _ = Logger.debug("FileWatcherManager :EXIT #{inspect(pid)} #{reason}")
     {:noreply, state}
   end
 
   def handle_info(unexpected, state) do
-    Logger.error("FileWatcherManager unexpected #{inspect(unexpected)}")
+    _ = Logger.debug("FileWatcherManager unexpected #{inspect(unexpected)}")
     {:noreply, state}
   end
 
   @doc false
   @impl true
   def terminate(reason, _state) do
-    Logger.error("FileWatcherManager terminate #{reason}")
+    _ = Logger.debug("FileWatcherManager terminate #{reason}")
     :ok
   end
 

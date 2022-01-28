@@ -84,8 +84,8 @@ defmodule LogWatcher.Commands.Command do
   # computed from the schema fields (including its associations).
 
   @spec arg_file_name(String.t(), integer(), String.t(), String.t()) :: String.t()
-  def arg_file_name(session_id, gen, command_id, name) do
-    "#{make_log_prefix(session_id, gen, command_id, name)}-arg.json"
+  def arg_file_name(session_id, gen, command_id, command_name) do
+    "#{make_log_prefix(session_id, gen, command_id, command_name)}-arg.json"
   end
 
   @spec arg_file_name(t()) :: String.t()
@@ -103,8 +103,8 @@ defmodule LogWatcher.Commands.Command do
   end
 
   @spec log_file_name(String.t(), integer(), String.t(), String.t(), boolean()) :: String.t()
-  def log_file_name(session_id, gen, command_id, name, is_archived \\ false) do
-    "#{make_log_prefix(session_id, gen, command_id, name)}-log.#{log_extension(is_archived)}"
+  def log_file_name(session_id, gen, command_id, command_name, is_archived \\ false) do
+    "#{make_log_prefix(session_id, gen, command_id, command_name)}-log.#{log_extension(is_archived)}"
   end
 
   @spec log_file_name(t()) :: String.t()
@@ -118,8 +118,8 @@ defmodule LogWatcher.Commands.Command do
   end
 
   @spec result_file_name(String.t(), integer(), String.t(), String.t()) :: String.t()
-  def result_file_name(session_id, gen, command_id, name) do
-    "#{make_log_prefix(session_id, gen, command_id, name)}-result.json"
+  def result_file_name(session_id, gen, command_id, command_name) do
+    "#{make_log_prefix(session_id, gen, command_id, command_name)}-result.json"
   end
 
   @spec result_file_name(t()) :: String.t()
@@ -128,9 +128,9 @@ defmodule LogWatcher.Commands.Command do
   end
 
   @spec make_log_prefix(String.t(), integer(), String.t(), String.t()) :: String.t()
-  def make_log_prefix(session_id, gen, command_id, name) do
+  def make_log_prefix(session_id, gen, command_id, command_name) do
     gen_str = to_string(gen) |> String.pad_leading(4, "0")
-    "#{session_id}-#{gen_str}-#{name}-#{command_id}"
+    "#{session_id}-#{gen_str}-#{command_name}-#{command_id}"
   end
 
   @spec log_extension(boolean()) :: String.t()

@@ -98,22 +98,22 @@ defmodule LogWatcher.DataCase do
   @spec await_task(reference() | integer(), integer()) ::
           {:ok, term()} | {:error, :timeout}
   def await_task(task_ref, timeout) when is_reference(task_ref) do
-    _ = Logger.error("await_task task_ref #{inspect(task_ref)}")
+    _ = Logger.debug("await_task task_ref #{inspect(task_ref)}")
     result = CommandManager.await(task_ref, timeout)
-    _ = Logger.error("await_task returned #{inspect(result)}")
+    _ = Logger.debug("await_task returned #{inspect(result)}")
     result
   end
 
   def await_task(job_id, timeout) when is_integer(job_id) do
-    _ = Logger.error("await_task job #{job_id}")
+    _ = Logger.debug("await_task job #{job_id}")
     result = CommandManager.await(job_id, timeout)
-    _ = Logger.error("await_task returned #{inspect(result)}")
+    _ = Logger.debug("await_task returned #{inspect(result)}")
     result
   end
 
   @spec await_os_process(integer(), integer()) :: :ok | {:error, :timeout}
   def await_os_process(os_pid, timeout) do
-    _ = Logger.error("await_os_process #{os_pid}")
+    _ = Logger.debug("await_os_process #{os_pid}")
     proc_file = "/proc/#{os_pid}"
 
     if File.exists?(proc_file) do

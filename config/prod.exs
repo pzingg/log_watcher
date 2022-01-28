@@ -4,5 +4,4 @@ import Config
 config :logger, level: :info
 
 # Configure your database
-config :log_watcher, LogWatcher.Repo,
-  pool_size: 15
+config :log_watcher, LogWatcher.Repo, pool_size: 15

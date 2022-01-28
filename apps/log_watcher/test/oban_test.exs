@@ -56,7 +56,7 @@ defmodule LogWatcher.ObanTest do
     {:ok, %Oban.Job{id: job_id, queue: queue, state: state}} =
       CommandJob.insert(session, command_id, command_name, command_args)
 
-    _ = Logger.error("inserted new job #{job_id} on queue #{queue}, state #{state}")
+    _ = Logger.debug("inserted new job #{job_id} on queue #{queue}, state #{state}")
 
     match_args = %{
       session_id: session.id,
@@ -97,14 +97,14 @@ defmodule LogWatcher.ObanTest do
     {:ok, %Oban.Job{id: job_id, queue: queue, state: state}} =
       CommandJob.insert(session, command_id, command_name, command_args)
 
-    _ = Logger.error("inserted new job #{job_id} on queue #{queue}, state #{state}")
+    _ = Logger.debug("inserted new job #{job_id} on queue #{queue}, state #{state}")
 
     expiry = System.monotonic_time(:millisecond) + @oban_exec_timeout
     {:ok, info} = await_job_state(job_id, :executing, expiry)
     assert Enum.member?(info.running, job_id)
 
     _ = Process.sleep(1_000)
-    _ = Logger.error("canceling job...")
+    _ = Logger.debug("canceling job...")
     :ok = Oban.cancel_job(job_id)
     :ok = CommandManager.cancel(job_id)
 

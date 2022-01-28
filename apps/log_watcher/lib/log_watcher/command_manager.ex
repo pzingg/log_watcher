@@ -1,4 +1,11 @@
 defmodule LogWatcher.CommandManager do
+  @moduledoc """
+  Maintains a map of started commands, associating
+  the `command_id`, Oban `job_id`, and the `ref` and `pid`
+  of the Elixir Task that is running the command, so that
+  clients can send requests to the associated ScriptRunner
+  process using any of the four keys.
+  """
   use GenServer
 
   require Logger
@@ -59,13 +66,13 @@ defmodule LogWatcher.CommandManager do
   @doc false
   @impl true
   def handle_call({:start_script, session, command_id, command_name, command_args}, from, state) do
-    await_start = Map.get(command_args, :await_start, true)
+    await_running = Map.get(command_args, :await_running, true)
     job_id = Map.get(command_args, :oban_job_id, 0)
 
     case CommandSupervisor.start_script_runner(session, command_id, command_name, command_args) do
-      {:ok, pid} ->
+      {:ok, _pid} ->
         state = [%__MODULE__{command_id: command_id, job_id: job_id} | state]
-        send(self(), {:run_script, from, pid, await_start})
+        send(self(), {:run_script, from, command_id, await_running})
         {:noreply, state}
 
       :ignore ->
@@ -99,14 +106,14 @@ defmodule LogWatcher.CommandManager do
 
   @doc false
   @impl true
-  def handle_info({:run_script, from, pid, await_start}, state) do
-    reply = GenServer.call(pid, {:run_script, await_start})
+  def handle_info({:run_script, from, command_id, await_running}, state) do
+    reply = ScriptRunner.run_script(command_id, await_running)
     GenServer.reply(from, reply)
     {:noreply, state}
   end
 
   def handle_info({:task_started, command_id, task}, state) do
-    Logger.info("CommandManager task_started for #{command_id}")
+    _ = Logger.debug("CommandManager task_started for #{command_id}")
 
     state =
       Enum.map(state, fn %__MODULE__{command_id: value} = command ->
@@ -121,31 +128,35 @@ defmodule LogWatcher.CommandManager do
   end
 
   def handle_info({:DOWN, ref, pid, reason}, state) do
-    Logger.error("CommandManager :DOWN #{inspect(ref)} #{inspect(pid)} #{reason}")
+    _ = Logger.debug("CommandManager :DOWN #{inspect(ref)} #{inspect(pid)} #{reason}")
     {:noreply, state}
   end
 
   def handle_info({:EXIT, pid, reason}, state) do
-    Logger.error("CommandManager :EXIT #{inspect(pid)} #{reason}")
+    _ = Logger.debug("CommandManager :EXIT #{inspect(pid)} #{reason}")
     {:noreply, state}
   end
 
   def handle_info(unexpected, state) do
-    Logger.error("CommandManager unexpected #{inspect(unexpected)}")
+    _ = Logger.debug("CommandManager unexpected #{inspect(unexpected)}")
     {:noreply, state}
   end
 
   @doc false
   @impl true
   def terminate(reason, _state) do
-    Logger.error("CommandManager terminate #{reason}")
+    _ = Logger.debug("CommandManager terminate #{reason}")
     :ok
   end
 
   # Private functions
 
   defp get_command_id(nil, key, key_type, state) do
-    Logger.error("CommandManager could not find #{key_type} #{inspect(key)} in #{inspect(state)}")
+    _ =
+      Logger.debug(
+        "CommandManager could not find #{key_type} #{inspect(key)} in #{inspect(state)}"
+      )
+
     nil
   end
 

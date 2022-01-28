@@ -12,7 +12,9 @@ defmodule LogWatcher.FileWatcher do
   If a file modification is detected, the server reads the new output
   from the stream, parses each JSON line, and broadcasts the parsed
   object on the PubSub session topic. A decoded line in the log file
-  is expected to be an Elixir map that includes a `:status` item.
+  is expected to be an Elixir map that includes `:message`, `:status`
+  and `:time` items.
+
   The `:status` value is expected to be a string with one of these values:
   "initializing" "created", "reading", "validating", "running",
   "cancelled" or "completed". If the `:status` item is missing,
@@ -27,11 +29,6 @@ defmodule LogWatcher.FileWatcher do
   A `:command_completed` message is sent for each line that has a status
   of "cancelled" or "completed", but this is expected to happen
   at most one time.
-
-  The payload for each of these messages is the file name (without
-  the path) that produced the change, and the map that was parsed,
-  containing at a minimum the `:session_id`, `command_id` and
-  `:status` items.
   """
   use GenServer, restart: :transient
 
@@ -40,6 +37,8 @@ defmodule LogWatcher.FileWatcher do
   alias LogWatcher.ScriptRunner
 
   defmodule WatchedFile do
+    @moduledoc false
+
     @enforce_keys [:session_id, :command_id, :file_name, :stream]
 
     defstruct session_id: nil,
@@ -149,13 +148,13 @@ defmodule LogWatcher.FileWatcher do
   @impl true
   @spec init(term()) :: {:ok, state()}
   def init(log_dir) do
-    _ = Logger.info("FileWatcher init #{log_dir}")
+    _ = Logger.debug("FileWatcher init #{log_dir}")
 
     # Trap exits so we terminate if parent dies
     _ = Process.flag(:trap_exit, true)
 
     args = [dirs: [log_dir], recursive: false]
-    _ = Logger.info("FileWatcher start FileSystem link with #{inspect(args)}")
+    _ = Logger.debug("FileWatcher start FileSystem link with #{inspect(args)}")
 
     {:ok, fs_pid} = FileSystem.start_link(args)
     FileSystem.subscribe(fs_pid)
@@ -205,7 +204,7 @@ defmodule LogWatcher.FileWatcher do
     else
       file = WatchedFile.new(session_id, command_id, Path.join(log_dir, file_name))
       file = check_for_lines(file)
-      _ = Logger.info("FileWatcher watch added for #{file_name}")
+      _ = Logger.debug("FileWatcher watch added for #{file_name}")
       state = %__MODULE__{state | files: Map.put_new(files, file_name, file)}
       {:reply, :ok, state}
     end
@@ -247,7 +246,7 @@ defmodule LogWatcher.FileWatcher do
         {:file_event, fs_pid, {path, events}},
         %__MODULE__{fs_pid: fs_pid, files: files} = state
       ) do
-    # Logger.info("FileWatcher #{inspect(fs_pid)} #{path}: #{inspect(events)}")
+    # Logger.debug("FileWatcher #{inspect(fs_pid)} #{path}: #{inspect(events)}")
 
     file_name = Path.basename(path)
 
@@ -270,21 +269,30 @@ defmodule LogWatcher.FileWatcher do
 
   def handle_info(
         {:file_event, fs_pid, :stop},
-        %__MODULE__{fs_pid: fs_pid} = state
+        %__MODULE__{log_dir: log_dir, fs_pid: fs_pid} = state
       ) do
-    _ = Logger.info("FileWatcher #{inspect(fs_pid)} :stop")
+    _ = Logger.debug("FileWatcher #{String.slice(log_dir, -20..-1)} :file_event :stop => :stop")
     {:stop, :normal, state}
   end
 
-  def handle_info(:cleanup, state) do
-    _ = Logger.info("FileWatcher cleanup => :stop")
+  def handle_info(:cleanup, %__MODULE__{log_dir: log_dir} = state) do
+    _ = Logger.debug("FileWatcher #{String.slice(log_dir, -20..-1)} cleanup => :stop")
+    {:stop, :normal, state}
+  end
+
+  def handle_info(unexpected, %__MODULE__{log_dir: log_dir} = state) do
+    _ =
+      Logger.debug(
+        "FileWatcher #{String.slice(log_dir, -20..-1)} unexpected #{inspect(unexpected)} => :stop"
+      )
+
     {:stop, :normal, state}
   end
 
   @doc false
   @impl true
-  def terminate(reason, _state) do
-    _ = Logger.error("FileWatcher terminate #{reason}")
+  def terminate(reason, %__MODULE__{log_dir: log_dir}) do
+    _ = Logger.debug("FileWatcher #{String.slice(log_dir, -20..-1)} terminate #{reason}")
   end
 
   # Private functions
@@ -332,19 +340,19 @@ defmodule LogWatcher.FileWatcher do
       handle_lines(next_file, lines)
     else
       {:exists, _} ->
-        # Logger.error("FileWatcher #{stream.path} does not exist")
+        # Logger.debug("FileWatcher #{stream.path} does not exist")
         %WatchedFile{file | stream: File.stream!(stream.path), position: 0, size: 0}
 
       {:size, _} ->
-        _ = Logger.error("FileWatcher no increase in size")
+        _ = Logger.debug("FileWatcher no increase in size")
         %WatchedFile{file | stream: File.stream!(stream.path), position: 0, size: 0}
 
       # {:mtime, _} ->
-      #  Logger.error("FileWatcher no change in mtime")
+      #  _ = Logger.debug("FileWatcher no change in mtime")
       #  file
 
       {:error, reason} ->
-        _ = Logger.error("FileWatcher cannot stat #{stream.path}: #{inspect(reason)}")
+        _ = Logger.debug("FileWatcher cannot stat #{stream.path}: #{inspect(reason)}")
         %WatchedFile{file | stream: File.stream!(stream.path), position: 0, size: 0}
     end
   end
@@ -353,7 +361,7 @@ defmodule LogWatcher.FileWatcher do
   defp handle_lines(%WatchedFile{} = file, []), do: file
 
   defp handle_lines(%WatchedFile{file_name: file_name} = file, lines) do
-    _ = Logger.info("FileWatcher got #{Enum.count(lines)} line(s) from #{file_name}")
+    _ = Logger.debug("FileWatcher got #{Enum.count(lines)} line(s) from #{file_name}")
 
     Enum.reduce(lines, file, fn line, acc ->
       report_changes(line, acc)
@@ -398,7 +406,7 @@ defmodule LogWatcher.FileWatcher do
         next_file
 
       _ ->
-        _ = Logger.error("FileWatcher, ignoring non-JSON: #{line}")
+        _ = Logger.debug("FileWatcher, ignoring non-JSON: #{line}")
         file
     end
   end

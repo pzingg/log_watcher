@@ -42,6 +42,8 @@ defmodule LogWatcher.MixProject do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
+      {:broadway, "~> 1.0"},
+      {:credo, "~> 1.6", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.1", only: [:dev], runtime: false},
       {:dotenvy, "~> 0.3"},
       {:ecto_sql, "~> 3.6"},
@@ -49,7 +51,6 @@ defmodule LogWatcher.MixProject do
       {:faker, "~> 0.16", only: [:dev, :test]},
       {:file_system, "~> 0.2"},
       {:gen_stage, "~> 1.1"},
-      {:broadway, "~> 1.0"},
       {:gproc, "~> 0.9"},
       {:jason, "~> 1.2"},
       {:oban, "~> 2.7"},
