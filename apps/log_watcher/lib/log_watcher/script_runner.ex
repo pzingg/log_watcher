@@ -24,7 +24,8 @@ defmodule LogWatcher.ScriptRunner do
             await_start: false,
             sigint_pending: false,
             task: nil,
-            awaiting_client: nil
+            awaiting_start: nil,
+            other_waiters: []
 
   @type state() :: %__MODULE__{
           command_args: map(),
@@ -41,7 +42,8 @@ defmodule LogWatcher.ScriptRunner do
           await_start: boolean(),
           sigint_pending: boolean(),
           task: Task.t() | nil,
-          awaiting_client: GenServer.from() | nil
+          awaiting_start: GenServer.from() | nil,
+          other_waiters: [{:atom, GenServer.from()}]
         }
 
   @type gproc_key :: {:n, :l, {:command_id, String.t()}}
@@ -66,8 +68,8 @@ defmodule LogWatcher.ScriptRunner do
     GenServer.call(via_tuple(command_id), {:run_script, script_path, start_args})
   end
 
-  def await_completion(command_id, timeout) do
-    GenServer.call(via_tuple(command_id), {:await_completion, timeout})
+  def await_exit(command_id, timeout) when is_integer(timeout) do
+    GenServer.call(via_tuple(command_id), {:await, :command_exit, timeout}, timeout + 1000)
   end
 
   def cancel(command_id) do
@@ -156,7 +158,7 @@ defmodule LogWatcher.ScriptRunner do
           gen: gen,
           command_id: command_id,
           command_name: command_name,
-          awaiting_client: nil
+          awaiting_start: nil
         } = state
       ) do
     start_args = encode_start_args(state)
@@ -177,9 +179,9 @@ defmodule LogWatcher.ScriptRunner do
     {:reply, {:error, :already_running}, state}
   end
 
-  def handle_call({:await_completion, timeout}, from, state) do
-    Process.send_after(self(), {:timeout, :completion, from}, timeout)
-    {:noreply, state}
+  def handle_call({:await, wait_type, timeout}, from, %__MODULE__{other_waiters: waiters} = state) do
+    Process.send_after(self(), {:timeout, wait_type, from}, timeout)
+    {:noreply, %__MODULE__{state | other_waiters: [{wait_type, from} | waiters]}}
   end
 
   def handle_call(:cancel, _from, state) do
@@ -211,13 +213,13 @@ defmodule LogWatcher.ScriptRunner do
     send(LogWatcher.CommandManager, {:task_started, command_id, task})
 
     # After we start the task, we store its reference and pid
-    {:noreply, %__MODULE__{state | task: task, awaiting_client: from}}
+    {:noreply, %__MODULE__{state | task: task, awaiting_start: from}}
   end
 
-  def handle_info({:timeout, _for_what, from}, state) do
+  def handle_info({:timeout, wait_type, from}, %__MODULE__{other_waiters: waiters} = state) do
     # state = maybe_send_reply(state, {:error, :timeout}, log_message: "timeout")
     GenServer.reply(from, {:error, :timeout})
-    {:noreply, state}
+    {:noreply, %__MODULE__{state | other_waiters: List.delete(waiters, {wait_type, from})}}
   end
 
   def handle_info({:command_event, event}, state) do
@@ -228,28 +230,33 @@ defmodule LogWatcher.ScriptRunner do
         {task_ref, result},
         %__MODULE__{command_id: command_id, task: %Task{ref: task_ref}} = state
       ) do
-    _ = Logger.info("ScriptRunner #{command_id} received task result")
+    _ = Logger.info("ScriptRunner #{command_id} received command result")
 
     state =
-      maybe_send_reply(state, {:error, {:script_terminated, result}},
-        log_message: "task result: script_terminated"
-      )
+      maybe_send_reply(state, {:error, {:command_result, result}}, log_message: "command result")
 
     {:noreply, state}
   end
 
   def handle_info(
         {:DOWN, task_ref, :process, _pid, reason},
-        %__MODULE__{command_id: command_id, task: %Task{ref: task_ref}} = state
+        %__MODULE__{command_id: command_id, task: %Task{ref: task_ref}, other_waiters: waiters} =
+          state
       ) do
-    _ = Logger.info("ScriptRunner #{command_id} task :DOWN #{reason}")
+    _ = Logger.info("ScriptRunner #{command_id} received command exit #{reason}")
 
+    # Will only send this if :command_result was never sent.
     state =
-      maybe_send_reply(%__MODULE__{state | task: nil}, {:error, {:script_crashed, reason}},
-        log_message: "task :DOWN #{reason}"
+      maybe_send_reply(%__MODULE__{state | task: nil}, {:error, {:command_exit, reason}},
+        log_message: "command exit #{reason}"
       )
 
-    {:noreply, state}
+    # If anyone else was waiting...
+    for {_wait_type, from} <- waiters do
+      GenServer.reply(from, {:ok, :command_exit})
+    end
+
+    {:noreply, %__MODULE__{state | task: nil, other_waiters: []}}
   end
 
   def handle_info({:DOWN, ref, pid, reason}, %__MODULE__{command_id: command_id} = state) do
@@ -397,7 +404,7 @@ defmodule LogWatcher.ScriptRunner do
         |> Map.put(:exit_status, exit_status)
         |> parse_result(output)
 
-      _ = send_event(command_id, :script_terminated, data)
+      _ = send_event(command_id, :command_result, data)
 
       {:ok, data}
     end
@@ -421,17 +428,8 @@ defmodule LogWatcher.ScriptRunner do
        ) do
     _ = Logger.info("ScriptRunner #{command_id} received #{event_type}")
 
-    {task_ref, task_pid} =
-      case {event_type, task} do
-        {:script_terminated, _} -> {nil, nil}
-        {_, %Task{ref: ref, pid: pid}} -> {ref, pid}
-        _ -> {nil, nil}
-      end
-
-    data =
-      event
-      |> Map.put(:task_ref, task_ref)
-      |> Map.put(:task_pid, task_pid)
+    # Include task information in event
+    event = add_task_info(event, task)
 
     state =
       if event_type == :command_updated do
@@ -446,11 +444,24 @@ defmodule LogWatcher.ScriptRunner do
       if event_type == :command_updated && await_start do
         state
       else
-        # :command_started, :script_terminated
-        maybe_send_reply(state, {:ok, data}, log_message: "#{event_type}")
+        # :command_started, :command_result
+        maybe_send_reply(state, {:ok, event}, log_message: "#{event_type}")
       end
 
     {:noreply, state}
+  end
+
+  defp add_task_info(%{event_type: event_type} = event, task) do
+    {task_ref, task_pid} =
+      if is_nil(task) || event_type == :command_result do
+        {nil, nil}
+      else
+        {task.ref, task.pid}
+      end
+
+    event
+    |> Map.put(:task_ref, task_ref)
+    |> Map.put(:task_pid, task_pid)
   end
 
   @spec maybe_update_os_pid(state(), map()) :: state()
@@ -523,7 +534,7 @@ defmodule LogWatcher.ScriptRunner do
 
   @spec maybe_send_reply(state(), term(), Keyword.t()) :: state()
   defp maybe_send_reply(
-         %__MODULE__{command_id: command_id, awaiting_client: nil} = state,
+         %__MODULE__{command_id: command_id, awaiting_start: nil} = state,
          _reply,
          opts
        ) do
@@ -538,7 +549,7 @@ defmodule LogWatcher.ScriptRunner do
   end
 
   defp maybe_send_reply(
-         %__MODULE__{command_id: command_id, awaiting_client: from} = state,
+         %__MODULE__{command_id: command_id, awaiting_start: from} = state,
          reply,
          opts
        ) do
@@ -550,7 +561,7 @@ defmodule LogWatcher.ScriptRunner do
     end
 
     _ = GenServer.reply(from, reply)
-    %__MODULE__{state | awaiting_client: nil}
+    %__MODULE__{state | awaiting_start: nil}
   end
 
   @spec shutdown_and_remove_task(state()) ::

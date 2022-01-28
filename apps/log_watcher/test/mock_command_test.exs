@@ -174,7 +174,7 @@ defmodule LogWatcher.MockTaskTest do
     assert found_command.gen == session.gen
     assert found_command.status == "running"
 
-    _ = await_task(task_ref, @script_timeout)
+    {:ok, _} = await_task(task_ref, @script_timeout)
 
     command_list = Commands.list_commands(session)
     assert Enum.count(command_list) == 1

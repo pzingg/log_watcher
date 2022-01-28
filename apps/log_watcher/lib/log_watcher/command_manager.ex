@@ -33,8 +33,8 @@ defmodule LogWatcher.CommandManager do
     GenServer.call(__MODULE__, {:start_script, session, command_id, command_name, command_args})
   end
 
-  def await(key, timeout) do
-    GenServer.call(__MODULE__, {:await, key, timeout})
+  def await(key, timeout) when is_integer(timeout) do
+    GenServer.call(__MODULE__, {:await, key, timeout}, timeout + 1000)
   end
 
   def cancel(key) do
@@ -79,7 +79,7 @@ defmodule LogWatcher.CommandManager do
   def handle_call({:await, key, timeout}, _from, state) do
     case find_runner(state, key) do
       nil -> {:reply, {:error, :not_found}, state}
-      command_id -> {:reply, ScriptRunner.await_completion(command_id, timeout), state}
+      command_id -> {:reply, ScriptRunner.await_exit(command_id, timeout), state}
     end
   end
 
