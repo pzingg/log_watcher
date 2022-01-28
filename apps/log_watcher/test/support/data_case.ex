@@ -18,7 +18,7 @@ defmodule LogWatcher.DataCase do
 
   require Logger
 
-  alias LogWatcher.ScriptServer
+  alias LogWatcher.CommandManager
 
   using do
     quote do
@@ -99,14 +99,14 @@ defmodule LogWatcher.DataCase do
           {:ok, term()} | {:error, :timeout}
   def await_task(task_ref, timeout) when is_reference(task_ref) do
     _ = Logger.error("await_task task_ref #{inspect(task_ref)}")
-    result = ScriptServer.await(task_ref, timeout)
+    result = CommandManager.await(task_ref, timeout)
     _ = Logger.error("await_task returned #{inspect(result)}")
     result
   end
 
   def await_task(job_id, timeout) when is_integer(job_id) do
     _ = Logger.error("await_task job #{job_id}")
-    result = ScriptServer.await(job_id, timeout)
+    result = CommandManager.await(job_id, timeout)
     _ = Logger.error("await_task returned #{inspect(result)}")
     result
   end

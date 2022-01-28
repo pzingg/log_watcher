@@ -2,7 +2,7 @@ defmodule LogWatcher.ObanTest do
   use LogWatcher.DataCase, async: false
   use Oban.Testing, repo: LogWatcher.Repo
 
-  alias LogWatcher.{Commands, CommandJob, ScriptServer}
+  alias LogWatcher.{Commands, CommandJob}
 
   require Logger
 
@@ -106,7 +106,7 @@ defmodule LogWatcher.ObanTest do
     _ = Process.sleep(1_000)
     _ = Logger.error("canceling job...")
     :ok = Oban.cancel_job(job_id)
-    :ok = ScriptServer.cancel(job_id)
+    :ok = CommandManager.cancel(job_id)
 
     {:ok, info} = await_job_state(job_id, :cancelled, expiry)
     assert Enum.member?(info.running, job_id)

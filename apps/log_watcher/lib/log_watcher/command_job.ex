@@ -7,7 +7,8 @@ defmodule LogWatcher.CommandJob do
 
   require Logger
 
-  alias LogWatcher.{CommandStarter, Sessions}
+  alias LogWatcher.CommandManager
+  alias LogWatcher.Sessions
   alias LogWatcher.Sessions.Session
 
   # Public interface
@@ -57,6 +58,7 @@ defmodule LogWatcher.CommandJob do
           "command_args" => command_args
         }
       }) do
+    # Trap exits so we terminate if parent dies
     _ = Process.flag(:trap_exit, true)
 
     _gen =
@@ -71,11 +73,16 @@ defmodule LogWatcher.CommandJob do
 
     session = Sessions.get_session!(session_id)
 
-    CommandStarter.watch_and_run(
+    command_args =
+      command_args
+      |> LogWatcher.json_encode_decode(:atoms)
+      |> Map.put(:oban_job_id, job_id)
+
+    CommandManager.start_script(
       session,
       command_id,
       command_name,
-      Map.put(command_args, "oban_job_id", job_id)
+      command_args
     )
   end
 

@@ -9,7 +9,9 @@ defmodule LogWatcher do
   Collection of utilities in this module.
   """
 
-  alias LogWatcher.{Commands, CommandStarter, Sessions}
+  alias LogWatcher.CommandManager
+  alias LogWatcher.Commands
+  alias LogWatcher.Sessions
 
   ## General utilities
 
@@ -60,6 +62,17 @@ defmodule LogWatcher do
   def maybe_raise_input_error({:ok, data}, _label, _id_field), do: data
 
   @doc """
+  Borrowed from Oban.Testing.
+  Converts all atomic keys to strings, and verifies that args are JSON-encodable.
+  """
+  @spec json_encode_decode(map(), atom()) :: map()
+  def json_encode_decode(map, key_type) do
+    map
+    |> Jason.encode!()
+    |> Jason.decode!(keys: key_type)
+  end
+
+  @doc """
   Create a random LogWatcher session and command, and run the command.
   Useful for observing the supervision tree (Hint: use `num_lines: 200`
   to generate a longer running command).
@@ -80,7 +93,7 @@ defmodule LogWatcher do
 
     _ = Commands.archive_session_commands(session)
 
-    CommandStarter.watch_and_run(session, command_id, command_name, command_args)
+    CommandManager.start_script(session, command_id, command_name, command_args)
   end
 
   def mock_command_base_dir() do
@@ -102,17 +115,19 @@ defmodule LogWatcher do
     gen = :rand.uniform(10) - 1
     session_name = to_string(description) |> String.slice(0..10) |> String.trim()
     session = Sessions.create_session!(session_name, description, tag, log_dir, gen)
+    script_file = Keyword.get(opts, :script_file, "mock_command.R")
+    script_path = Path.join([:code.priv_dir(:log_watcher), "mock_command", script_file])
 
     %{
       session: session,
       command_id: Faker.Util.format("CMD%4d"),
       command_name: Faker.Util.pick(["create", "update", "generate", "analytics"]),
       command_args: %{
-        "script_file" => Keyword.get(opts, :script_file, "mock_command.R"),
-        "error" => Keyword.get(opts, :error, ""),
-        "cancel" => Keyword.get(opts, :cancel, false),
-        "num_lines" => :rand.uniform(6) + 6,
-        "space_type" => Faker.Util.pick(["mixture", "factorial", "sparsefactorial"])
+        script_path: script_path,
+        error: Keyword.get(opts, :error, ""),
+        cancel: Keyword.get(opts, :cancel, false),
+        num_lines: :rand.uniform(6) + 6,
+        space_type: Faker.Util.pick(["mixture", "factorial", "sparsefactorial"])
       }
     }
   end
@@ -130,7 +145,6 @@ defmodule LogWatcher do
 
     _ = Commands.archive_session_commands(session)
 
-    _loop_info =
-      CommandStarter.start_watcher_and_script(session, command_id, command_name, command_args)
+    _start_result = CommandManager.start_script(session, command_id, command_name, command_args)
   end
 end

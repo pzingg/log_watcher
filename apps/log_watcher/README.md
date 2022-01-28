@@ -1,6 +1,6 @@
 # LogWatcher
 
-The application provides an Oban-compatible `LogWatcher.CommandStarter` worker
+The application provides an Oban-compatible `LogWatcher.CommandJob` worker
 module that can start long-running shell scripts, which produce JSON-formatted
 log files.
 
@@ -8,7 +8,7 @@ Meanwhile the `LogWatcher.FileWatcher` GenServer uses inotify tools to monitor
 changes in the log files that the scripts produce, and broadcasts these changes
 as messages on a PubSub topic.
 
-`LogWatcher.CommandStarter` invokes commands on a `LogWatcher.ScriptServer`
+`LogWatcher.ScriptRunner` invokes commands on a `LogWatcher.CommandManager`
 GenServer to launch, cancel and wait on the shell scripts as needed.
 
 
@@ -75,7 +75,7 @@ command's `log.jsonl` file to `log.jsonx`.
 
 ## Command status
 
-Before running the shell script, the `CommandStarter` module places the
+Before running the shell script, the `ScriptRunner` module places the
 JSON-encoded arguments file for the command in the `log_dir`
 directory.
 
@@ -107,7 +107,7 @@ identified by the `status` item in the `LogWatcher.Commands.Command` struct:
   If no exceptions occur, we pass to the next phase:
 5. "running" - The command is performing what could be a long-term
   process. A start file is also written, recording the parsed
-  arguments and the time that execution started. The CommandStarter
+  arguments and the time that execution started. The ScriptRunner
   process is sent a `:command_started` message when the FileWatcher
   parses the first log message written in a "running", "cancelled",
   or "completed" phase. Normal execution will pass to either the
@@ -149,12 +149,12 @@ run.
 Note: Oban will send an exit signal to a running worker when
 a job is canceled, but only if PostgreSQL notifications are
 active. In the test environment, we must manually send a
-`cancel` command to the `LogWatcher.ScriptServer`.
+`cancel` command to the `LogWatcher.CommandManager`.
 
 
 ## Oban compatibility
 
-The `LogWatcher.CommandStarter` module implements the `Oban.Worker`
+The `LogWatcher.ScriptRunner` module implements the `Oban.Worker`
 behaviour, so that a `LogWatcher.Commands.Command` can be
 started using Oban's scheduling sytem. Tasks that
 encounter exceptions or script-generated errors, return an
@@ -196,7 +196,7 @@ The tree below annotates the PIDs in the diagram above.
         LogWatcher.PubSub.Adapter
       LogWatcher.Repo
         0.326.0 - DBConnection.ConnectionPool
-      LogWatcher.ScriptServer
+      LogWatcher.CommandManager
       LogWatcher.TaskSupervisor
-        0.427.0 - Task [monitored by LogWatcher.ScriptServer]
+        0.427.0 - Task [monitored by LogWatcher.CommandManager]
 ```

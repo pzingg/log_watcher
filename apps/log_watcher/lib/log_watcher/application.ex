@@ -10,11 +10,11 @@ defmodule LogWatcher.Application do
       # Start the Ecto repository
       LogWatcher.Repo,
       # Supervise file watches
-      {LogWatcher.FileWatcherSupervisor, name: LogWatcher.FileWatcherSupervisor},
+      {LogWatcher.FileWatcherManager, name: LogWatcher.FileWatcherManager},
+      # Run scripts
+      {LogWatcher.CommandManager, name: LogWatcher.CommandManager},
       # Monitor long running scripts via Elixir Commands.
       {Task.Supervisor, name: LogWatcher.TaskSupervisor},
-      # Run scripts
-      {LogWatcher.ScriptServer, name: LogWatcher.ScriptServer},
       # Start the PubSub system
       {Phoenix.PubSub, name: LogWatcher.PubSub},
       # Run jobs via a PostgreSQL database

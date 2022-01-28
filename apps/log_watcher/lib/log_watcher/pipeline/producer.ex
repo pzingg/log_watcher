@@ -14,7 +14,7 @@ defmodule LogWatcher.Pipeline.Producer do
   State is not used.
   """
   def init(opts) do
-    _ = Logger.error("Producer init #{inspect(opts)}")
+    _ = Logger.info("Producer init")
     {:producer, %{draining: false, test_pid: Keyword.get(opts, :test_pid)}}
   end
 
