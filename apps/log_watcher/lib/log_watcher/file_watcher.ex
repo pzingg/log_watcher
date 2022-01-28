@@ -33,7 +33,7 @@ defmodule LogWatcher.FileWatcher do
   containing at a minimum the `:session_id`, `command_id` and
   `:status` items.
   """
-  use GenServer
+  use GenServer, restart: :transient
 
   require Logger
 
@@ -227,7 +227,7 @@ defmodule LogWatcher.FileWatcher do
 
         %WatchedFile{} = file ->
           _ = check_for_lines(file)
-          files = Map.drop(files, file_name)
+          files = Map.delete(files, file_name)
 
           if cleanup && Enum.empty?(files) do
             send(self(), :cleanup)

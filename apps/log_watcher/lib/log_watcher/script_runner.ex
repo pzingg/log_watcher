@@ -2,7 +2,7 @@ defmodule LogWatcher.ScriptRunner do
   @moduledoc """
   A GenServer that runs scripts.
   """
-  use GenServer
+  use GenServer, restart: :transient
 
   require Logger
 
@@ -154,19 +154,14 @@ defmodule LogWatcher.ScriptRunner do
         from,
         %__MODULE__{
           session_id: session_id,
-          log_dir: log_dir,
-          gen: gen,
           command_id: command_id,
-          command_name: command_name,
           awaiting_start: nil
         } = state
       ) do
     start_args = encode_start_args(state)
     _ = write_start_args(state, start_args)
 
-    log_path =
-      Path.join(log_dir, Command.log_file_name(session_id, gen, command_id, command_name))
-
+    log_path = get_log_path(state)
     FileWatcherManager.watch(session_id, command_id, log_path)
 
     send(self(), {:start_script_task, from})
@@ -256,11 +251,13 @@ defmodule LogWatcher.ScriptRunner do
       GenServer.reply(from, {:ok, :command_exit})
     end
 
-    {:noreply, %__MODULE__{state | task: nil, other_waiters: []}}
+    {:stop, :normal, %__MODULE__{state | task: nil, other_waiters: []}}
   end
 
   def handle_info({:DOWN, ref, pid, reason}, %__MODULE__{command_id: command_id} = state) do
     Logger.error("ScriptRunner #{command_id} :DOWN #{inspect(ref)} #{inspect(pid)} #{reason}")
+
+    # TODO: return {:stop, :normal, state}
     {:noreply, state}
   end
 
@@ -271,19 +268,25 @@ defmodule LogWatcher.ScriptRunner do
     state =
       maybe_send_reply(state, {:error, reason}, log_message: ":EXIT #{inspect(pid)} #{reason}")
 
+    # TODO: return {:stop, :normal, state}
     {:noreply, state}
   end
 
   def handle_info(unexpected, %__MODULE__{command_id: command_id} = state) do
     _ = Logger.error("ScriptRunner #{command_id} unexpected #{inspect(unexpected)}")
     state = maybe_send_reply(state, {:error, :unimplemented}, log_message: "unexpected")
+
+    # TODO: return {:stop, :normal, state}
     {:noreply, state}
   end
 
   @doc false
   @impl true
-  def terminate(reason, %__MODULE__{command_id: command_id}) do
-    Logger.error("ScriptRunner #{command_id} terminate #{reason}")
+  def terminate(reason, %__MODULE__{command_id: command_id} = state) do
+    _ = Logger.error("ScriptRunner #{command_id} terminate #{reason}")
+    log_path = get_log_path(state)
+    FileWatcherManager.unwatch(log_path, true)
+
     :ok
   end
 
@@ -314,22 +317,32 @@ defmodule LogWatcher.ScriptRunner do
     |> Map.put_new(:num_lines, 10)
   end
 
-  defp write_start_args(
-         %__MODULE__{
-           command_id: command_id,
-           command_name: command_name,
-           session_id: session_id,
-           log_dir: log_dir,
-           gen: gen
-         },
-         start_args
-       ) do
-    arg_path =
-      Path.join(log_dir, Command.arg_file_name(session_id, gen, command_id, command_name))
+  defp write_start_args(%__MODULE__{command_id: command_id} = state, start_args) do
+    arg_path = get_arg_path(state)
 
     _ = Logger.info("ScriptRunner #{command_id}: write arg file to #{arg_path}")
 
     Commands.write_arg_file(arg_path, start_args)
+  end
+
+  defp get_arg_path(%__MODULE__{
+         command_id: command_id,
+         command_name: command_name,
+         session_id: session_id,
+         log_dir: log_dir,
+         gen: gen
+       }) do
+    Path.join(log_dir, Command.arg_file_name(session_id, gen, command_id, command_name))
+  end
+
+  defp get_log_path(%__MODULE__{
+         command_id: command_id,
+         command_name: command_name,
+         session_id: session_id,
+         log_dir: log_dir,
+         gen: gen
+       }) do
+    Path.join(log_dir, Command.log_file_name(session_id, gen, command_id, command_name))
   end
 
   @spec do_run_script(state()) ::
