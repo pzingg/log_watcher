@@ -1,29 +1,47 @@
 # LogWatcher
 
-The application provides an Oban-compatible `LogWatcher.CommandJob` worker
-module that can start long-running shell scripts, which produce JSON-formatted
-log files.
+The application provides a `CommandManager` process that
+invokes commands on a `ScriptRunner` GenServer to launch,
+cancel and wait on asynchronous long-running shell scripts.
 
-Meanwhile the `LogWatcher.FileWatcher` GenServer uses inotify tools to monitor
-changes in the log files that the scripts produce, and broadcasts these changes
-as messages on a PubSub topic.
+The application provides an Oban-compatible `CommandJob` worker
+module that just forwards jobs to the CommandManager.
 
-`LogWatcher.ScriptRunner` invokes commands on a `LogWatcher.CommandManager`
-GenServer to launch, cancel and wait on the shell scripts as needed.
+Meanwhile a `FileWatcher` GenServer uses inotify tools to monitor
+changes in the JSON-formatted log files that the scripts produce, and
+sends changes as "event" messages to the mailbox of the ScriptRunner
+process.
 
+The events are also sent to a Broadway pipeline, configured
+in the `Pipeline` module, where they are converted to `Event`
+structs which are then inserted asynchronously into the Ecto
+repository (PostgreSQL database). `Pipeline.Handler` and
+`Pipeline.Producer` modules assist in adding and processing
+these events.
 
-## Sessions and Tasks
+The Elixir DynamicSupervisor processes `CommandSupervisor` and
+`FileWatcherSupervisor` are responsible for starting `ScriptRunner`
+and `FileWatcher` instances, respectively.
 
-The idea is that a session is location on the filesystem that
+## Sessions and commands
+
+The idea is that a session is a location on the filesystem that
 contains executable shell scripts, data, and log files.
 
-Each invocation of a shell script is called a command. Tasks may
+Each invocation of a shell script is called a command. Commands may
 read and write data, and record events, state changes, and
 results in log files.
 
-Sessions and commands are identified by IDs that are assigned on the
+Sessions and commands are identified by ULIDs that are assigned on the
 Elixir side.
 
+The `Commands` context module can perform a limited number
+of read-only database-like operations, using the log files located in
+the `log_dir` directory, and returning data in `Session` and
+`Command` structs.
+
+There is one mutation method, which "archives" a command, by renaming the
+command's `log.jsonl` file to `log.jsonx`.
 
 ## JSON data and log files
 
@@ -32,7 +50,6 @@ called the `log_dir`. They all use JSON encoding to record
 state changes and results. The `jsonl` (and archived `jsonx`) files use
 the [JSON Lines](https://jsonlines.org/) format, while the `json`
 files are regular JSON files.
-
 
 ### Log files
 
@@ -52,7 +69,6 @@ number:
 * session_id-command_id-name-gen-result.json - Command result file. Contains
   command info, completed_at, os_pid, status, completion result or errors.
 
-
 ### Arguments file
 
 There is one file with a well-known name that the Elixir side
@@ -60,18 +76,6 @@ places in the `log_dir` directory:
 
 * command_id-gen-name-arg.json - Command arguments file, written by
   the Elixir side before the command script is run.
-
-
-## Ecto.Changeset-compatible database of Sessions and Tasks
-
-The `LogWatcher.Commands` context module can perform a limited number
-of read-only database-like operations, using the log files located in
-the `log_dir` directory, and returning data in
-`LogWatcher.Commands.Session` and `LogWatcher.Commands.Command` structs.
-
-There is one mutation method, which "archives" a command, by renaming the
-command's `log.jsonl` file to `log.jsonx`.
-
 
 ## Command status
 
@@ -83,11 +87,12 @@ Then the command's shell script is invoked with standard command line
 options specifying the `session_id`, `log_dir`, `command_id`,
 `name`, and `gen` number.
 
-The shell script (current either Rscript or Python) is responsible for
-parsing arguments from the command line and from the arguments file.
+The shell script (currently either an Rscript .R or Python .py file)
+is responsible for parsing arguments from the command line and from
+the arguments file.
 
 While running, a command progresses through seven well-known phases,
-identified by the `status` item in the `LogWatcher.Commands.Command` struct:
+identified by the `status` item in the `Command` struct:
 
 1. "initializing" - This initial phase comes before command line arguments
   have been parsed and the log file system established. Any errors thrown
@@ -125,7 +130,6 @@ identified by the `status` item in the `LogWatcher.Commands.Command` struct:
   also written, and the log file will include a pointer
   to the result file.
 
-
 ## Exceptions and cancellations
 
 The Python and Rscript examples will catch any exception
@@ -149,54 +153,16 @@ run.
 Note: Oban will send an exit signal to a running worker when
 a job is canceled, but only if PostgreSQL notifications are
 active. In the test environment, we must manually send a
-`cancel` command to the `LogWatcher.CommandManager`.
-
+`cancel` command to the `CommandManager`.
 
 ## Oban compatibility
 
-The `LogWatcher.ScriptRunner` module implements the `Oban.Worker`
-behaviour, so that a `LogWatcher.Commands.Command` can be
-started using Oban's scheduling sytem. Tasks that
-encounter exceptions or script-generated errors, return an
-`{:ok, result}` tuple, since they are expected to complete
-(writing errors to the log file).
+The `CommandJob` module implements the `Oban.Worker`
+behaviour, so that a command can be started using Oban's
+scheduling sytem. Commands that encounter exceptions or
+script-generated errors, return an `{:ok, result}` tuple,
+since they are expected to complete (writing errors to the log file).
 
-Tasks that cannot be started, or have other structural
+Commands that cannot be started, or have other structural
 problems, return a `{:discard, result}` tuple
 so that Oban will not attempt to re-run them.
-
-## Supervision tree and processes
-
-![log_watcher_tree.png](log_watcher_tree.png)
-
-The tree below annotates the PIDs in the diagram above.
-
-```
-0.322.0 - application_master.init
-  0.323.0 - application_master.start_it
-    LogWatcher.Supervisor
-      0.355.0 - Oban
-        0.356.0 - Oban.PostgresNotifier
-          0.359.0 - Postgrex.Notifications
-        0.357.0 - Oban.Midwife
-        0.358.0 - Oban.Plugins.Pruner
-        0.360.0 - Oban.Plugins.Stager
-        0.361.0 - Oban.Queue.Supervisor
-          0.362.0 - Task.Supervisor
-          0.363.0 - Oban.Queue.Producer
-          0.364.0 - Oban.Queue.Watchman
-      LogWatcher.FileWatcherSupervisor
-        0.423.0 - LogWatcher.FileWatcher
-          0.424.0 - FileSystem.Worker
-            0.425.0 - FileSystem.Backends.FSInotify
-      LogWatcher.PubSubSupervisor
-        LogWatcher.PubSub
-          LogWatcher.PubSub.PIDPartition0
-          LogWatcher.PubSub.PIDPartition1
-        LogWatcher.PubSub.Adapter
-      LogWatcher.Repo
-        0.326.0 - DBConnection.ConnectionPool
-      LogWatcher.CommandManager
-      LogWatcher.TaskSupervisor
-        0.427.0 - Task [monitored by LogWatcher.CommandManager]
-```

@@ -1,6 +1,8 @@
 defmodule LogWatcher.Pipeline do
   @moduledoc """
-  Recieves Messages events from Producer.
+  Configures a Broadway pipeline that recieves events from the
+  `Pipeline.Producer` module. The `Pipeline.Handler` module
+  processes these events, inserting them into an Ecto repository.
   """
   use Broadway
 

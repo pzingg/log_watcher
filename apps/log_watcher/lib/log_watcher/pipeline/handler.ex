@@ -1,6 +1,9 @@
 defmodule LogWatcher.Pipeline.Handler do
   @moduledoc """
-  Wraps LogWatcher events into Broadway.Messages, and inserts events into the database.
+  A Utility module for the Broadway pipeline.
+  It handles transforming LogWatcher events into Broadway.Messages,
+  inserting them into the database, and publishing them on
+  Phoenix PubSub after they have been inserted.
   """
 
   require Logger
