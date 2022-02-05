@@ -12,8 +12,8 @@
 
 user1 =
   %LogWatcher.Accounts.User{
-    first_name: "Peter",
-    last_name: "Zingg",
+    first_name: "Jeffrey",
+    last_name: "Bezos",
     email: "bezos@amazon.com"
   }
   |> LogWatcher.Repo.insert!()
