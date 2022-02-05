@@ -35,13 +35,13 @@ run_command <- function(args) {
   write_start <- FALSE
   write_result <- FALSE
 
-  jcat(paste0("run_command: error ", error, "\n"))
+  jcat(paste0("run_command: error ", error))
 
-  jcat("writing first log message\n")
+  jcat("writing first log message")
   res <- create_command(args)
   futile.logger::flog.info(res$message)
   log_event("command_created", res)
-  jcat("log file created\n")
+  jcat("log file created")
 
   set_script_status("reading")
   arg_file <- arg_file_name(session_id, gen, command_id, command_name)
@@ -52,14 +52,17 @@ run_command <- function(args) {
 
   res <- read_arg_file(arg_path)
   futile.logger::flog.info(res$message)
-  jcat("read arg file\n")
+  jcat("read arg file")
 
-  sleep_time <- 1.0
+  sleep_time <- 0.25
   num_lines <- res$args$num_lines
   for (line_no in 1:num_lines) {
     Sys.sleep(sleep_time)
 
-    res <- mock_status(command_id, line_no, num_lines, error)
+    # read_arg_file can set status to "completed"
+    if (!identical(res$status, "completed")) {
+      res <- mock_status(command_id, line_no, num_lines, error)
+    }
 
     status <- res$status
     message <- res$message
@@ -102,30 +105,34 @@ run_command <- function(args) {
     if (write_start) {
       start_file <- start_file_name(session_id, gen, command_id, command_name)
       write_start_file(start_file, res)
-      jcat("wrote start\n")
+      jcat("wrote start")
       write_start <- FALSE
       sleep_time <- 0.25
     }
 
     if (write_result && !is.null(result_file)) {
       write_result_file(result_file, res, result)
-      jcat("wrote result\n")
+      jcat("wrote result")
     }
 
     log_res(message, res)
-    jcat(paste0("wrote line ", line_no, "\n"))
+    jcat(paste0("wrote line ", line_no))
 
     if (write_result) {
       if (identical(error, "forever")) {
-        jcat("running forever...\n")
+        jcat("running forever...")
         while (1) {
           Sys.sleep(sleep_time)
         }
       } else {
         break
       }
+    } else {
+      Sys.sleep(sleep_time)
     }
   }
+
+  jcat("closing log file")
 }
 
 blowup_a <- function() {
@@ -152,6 +159,7 @@ create_command <- function(args) {
   )
 
   set_script_status("created")
+
   res
 }
 
@@ -198,7 +206,7 @@ mock_status <- function(command_id, line_no, num_lines, error) {
 
   res <- list(
     status = status,
-    message = paste0("Task ", command_id, " ", status, " on line ", line_no),
+    message = paste0("Command ", command_id, " ", status, " on line ", line_no),
     progress = progress,
     result = result,
     errors = errors

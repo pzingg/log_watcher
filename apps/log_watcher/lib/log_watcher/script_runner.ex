@@ -10,11 +10,11 @@ defmodule LogWatcher.ScriptRunner do
   by concatenating `session_id`, `gen`, `command_name` and
   `command_id` strings.
 
-  The `run_script` method will return a reply when the script
-  has "started" (or failed to start), meaning that the OS shell
-  process has been created, the script has read any arguments
-  and validated them, and has appended a log line with a
-  status value of "running", "cancelled" or "completed".
+  If `await_running` is `true`, the `run_script` method will return
+  a reply when the script has "started" (or failed to start),
+  meaning that the OS shell, process has been created, the script
+  has read any arguments and validated them, and has appended a
+  log line with a status value of "running", "cancelled" or "completed".
 
   See the FileWatcher module documentation for more
   information on expectations for log file output.
@@ -41,7 +41,7 @@ defmodule LogWatcher.ScriptRunner do
             await_running: false,
             sigint_pending: false,
             task: nil,
-            awaiting_start: nil,
+            client_from: nil,
             other_waiters: []
 
   @type state() :: %__MODULE__{
@@ -59,7 +59,7 @@ defmodule LogWatcher.ScriptRunner do
           await_running: boolean(),
           sigint_pending: boolean(),
           task: Task.t() | nil,
-          awaiting_start: GenServer.from() | nil,
+          client_from: GenServer.from() | nil,
           other_waiters: [{:atom, GenServer.from()}]
         }
 
@@ -69,7 +69,7 @@ defmodule LogWatcher.ScriptRunner do
     :session_id,
     :log_dir,
     :command_id,
-    :name,
+    :command_name,
     :gen
   ]
 
@@ -99,8 +99,8 @@ defmodule LogWatcher.ScriptRunner do
   an Elixir Task. The process will then receive events from the FileWatcher
   to update its state.
   """
-  def run_script(command_id, await_running \\ true) do
-    GenServer.call(via_tuple(command_id), {:run_script, await_running})
+  def run_script(command_id, await_running, timeout) do
+    GenServer.call(via_tuple(command_id), {:run_script, await_running, timeout}, timeout + 100)
   end
 
   @doc """
@@ -108,7 +108,7 @@ defmodule LogWatcher.ScriptRunner do
   `{:error, timeout}` if the timeout (in milliseconds) has been exceeded.
   """
   def await_exit(command_id, timeout) when is_integer(timeout) do
-    GenServer.call(via_tuple(command_id), {:await, :command_exit, timeout}, timeout + 1000)
+    GenServer.call(via_tuple(command_id), {:await, :command_exit, timeout}, timeout + 100)
   end
 
   @doc """
@@ -131,8 +131,8 @@ defmodule LogWatcher.ScriptRunner do
   it still alive, and posting it to the Broadway pipeline.
   """
   @spec send_event(String.t(), atom(), map()) :: :ok
-  def send_event(command_id, event_type, data) do
-    event = Map.put(data, :event_type, event_type)
+  def send_event(command_id, event_type, event_data) do
+    event = Map.put(event_data, :event_type, event_type)
 
     case whereis(command_id) do
       :undefined ->
@@ -156,10 +156,12 @@ defmodule LogWatcher.ScriptRunner do
   end
 
   @doc """
-  Return the pid for a server.
+  Return the pid for this server.
   """
-  @spec whereis(String.t()) :: pid() | :undefined
-  def whereis(command_id) do
+  @spec whereis(pid() | String.t()) :: pid() | :undefined
+  def whereis(pid) when is_pid(pid), do: pid
+
+  def whereis(command_id) when is_binary(command_id) do
     :gproc.where(registry_key(command_id))
   end
 
@@ -176,19 +178,28 @@ defmodule LogWatcher.ScriptRunner do
     # Trap exits so we terminate if parent dies
     _ = Process.flag(:trap_exit, true)
 
-    state = %__MODULE__{
-      command_args: command_args,
-      session_id: session.id,
-      log_dir: session.log_dir,
-      gen: session.gen,
-      command_id: command_id,
-      command_name: command_name,
-      job_id: Map.get(command_args, :oban_job_id, 0),
-      cancel: Map.get(command_args, :cancel, ""),
-      script_path: Map.get(command_args, :script_path)
-    }
+    log_dir = session.log_dir
+    script_path = Map.get(command_args, :script_path)
 
-    {:ok, state}
+    case check_access(script_path, log_dir) do
+      :ok ->
+        state = %__MODULE__{
+          command_args: command_args,
+          session_id: session.id,
+          log_dir: log_dir,
+          gen: session.gen,
+          command_id: command_id,
+          command_name: command_name,
+          job_id: Map.get(command_args, :oban_job_id, 0),
+          cancel: Map.get(command_args, :cancel, ""),
+          script_path: script_path
+        }
+
+        {:ok, state}
+
+      {:error, reason} ->
+        {:stop, reason}
+    end
   end
 
   def init(_arg), do: {:error, :badarg}
@@ -196,33 +207,36 @@ defmodule LogWatcher.ScriptRunner do
   @doc false
   @impl true
   def handle_call(
-        {:run_script, await_running},
+        {:run_script, await_running, timeout},
         from,
         %__MODULE__{
           session_id: session_id,
           command_id: command_id,
-          awaiting_start: nil
+          command_name: command_name,
+          client_from: nil
         } = state
       ) do
     start_args = encode_start_args(state)
     _ = write_start_args(state, start_args)
 
     log_path = get_log_path(state)
-    FileWatcherManager.watch(session_id, command_id, log_path)
+    FileWatcherManager.watch(session_id, command_id, command_name, log_path)
 
-    send(self(), {:start_script_task, from})
+    send(self(), {:await, :run_script, timeout})
+    send(self(), :start_script_task)
 
-    # We will return the reply after the script has started or terminated.
-    {:noreply, %__MODULE__{state | await_running: await_running}}
+    # If await_running is set, we will return the reply only after the script has
+    # has entered the "running" state, or has terminated.
+    {:noreply, %__MODULE__{state | client_from: from, await_running: await_running}}
   end
 
   def handle_call({:run_script, _await_running}, _from, state) do
     {:reply, {:error, :already_running}, state}
   end
 
-  def handle_call({:await, wait_type, timeout}, from, %__MODULE__{other_waiters: waiters} = state) do
-    Process.send_after(self(), {:timeout, wait_type, from}, timeout)
-    {:noreply, %__MODULE__{state | other_waiters: [{wait_type, from} | waiters]}}
+  def handle_call({:await, wait_type, timeout}, from, state) do
+    state = set_timeout(state, wait_type, timeout, from)
+    {:noreply, state}
   end
 
   def handle_call(:cancel, _from, state) do
@@ -248,20 +262,42 @@ defmodule LogWatcher.ScriptRunner do
 
   @doc false
   @impl true
-  def handle_info({:start_script_task, from}, %__MODULE__{command_id: command_id} = state) do
+  def handle_info(
+        :start_script_task,
+        %__MODULE__{command_id: command_id} = state
+      ) do
+    parent = self()
+
     task =
       Task.Supervisor.async_nolink(LogWatcher.TaskSupervisor, fn ->
-        do_run_script(state)
+        do_run_script(parent, state)
       end)
 
     send(LogWatcher.CommandManager, {:task_started, command_id, task})
 
     # After we start the task, we store its reference and pid
-    {:noreply, %__MODULE__{state | task: task, awaiting_start: from}}
+    # If `await_running` is `false`, The `do_run_script` will send
+    # an event to the `client_from` client when the shell script
+    # is launched.
+    {:noreply, %__MODULE__{state | task: task}}
   end
 
-  def handle_info({:timeout, wait_type, from}, %__MODULE__{other_waiters: waiters} = state) do
-    # state = maybe_send_reply(state, {:error, :timeout}, log_message: "timeout")
+  def handle_info({:await, :run_script, timeout}, state) do
+    state = set_timeout(state, :run_script, timeout)
+    {:noreply, state}
+  end
+
+  def handle_info({:timeout, :run_script, _from}, state) do
+    # Send timeout error event to run_script client
+    state = maybe_send_reply(state, {:error, :timeout}, log_message: "timeout")
+    {:noreply, state}
+  end
+
+  def handle_info(
+        {:timeout, wait_type, from},
+        %__MODULE__{other_waiters: waiters} = state
+      ) do
+    # Send error, :timeout reply
     GenServer.reply(from, {:error, :timeout})
     {:noreply, %__MODULE__{state | other_waiters: List.delete(waiters, {wait_type, from})}}
   end
@@ -319,6 +355,16 @@ defmodule LogWatcher.ScriptRunner do
 
   # Private functions
 
+  defp set_timeout(%__MODULE__{other_waiters: waiters} = state, wait_type, timeout, from \\ nil) do
+    Process.send_after(self(), {:timeout, wait_type, from}, timeout)
+
+    if wait_type != :run_script do
+      %__MODULE__{state | other_waiters: [{wait_type, from} | waiters]}
+    else
+      state
+    end
+  end
+
   defp reply_to_all_waiters(%__MODULE__{other_waiters: waiters} = state, wait_type) do
     # If anyone else was waiting...
     for {_wait_type, from} <- waiters do
@@ -331,6 +377,15 @@ defmodule LogWatcher.ScriptRunner do
   @spec registry_key(String.t()) :: gproc_key()
   defp registry_key(command_id) do
     {:n, :l, {:command_id, command_id}}
+  end
+
+  defp check_access(script_path, log_dir) do
+    with {:ok, _stat} <- File.stat(script_path),
+         :ok <- File.mkdir_p(log_dir) do
+      :ok
+    else
+      error -> error
+    end
   end
 
   defp encode_start_args(%__MODULE__{
@@ -381,9 +436,12 @@ defmodule LogWatcher.ScriptRunner do
     Path.join(log_dir, Command.log_file_name(session_id, gen, command_id, command_name))
   end
 
-  @spec do_run_script(state()) ::
+  # Task function, runs in its own proccess.
+  # The `parent` argument is the ScriptRunner process that spawned this process.
+  @spec do_run_script(pid(), state()) ::
           {:ok, map()} | {:error, term()}
   defp do_run_script(
+         parent,
          %__MODULE__{
            command_id: command_id,
            command_name: command_name,
@@ -400,28 +458,41 @@ defmodule LogWatcher.ScriptRunner do
         "ScriptRunner #{command_id} run_script #{script_path} with #{inspect(script_args)}"
       )
 
-    executable =
-      if String.ends_with?(script_path, ".R") do
-        System.find_executable("Rscript")
-      else
-        System.find_executable("python3")
-      end
-
-    data =
+    base_data =
       script_args
       |> Map.merge(Map.from_struct(state))
       |> Enum.filter(fn {key, _value} -> Enum.member?(@event_data_keys, key) end)
       |> Map.new()
 
+    shell_command =
+      case Path.extname(script_path) do
+        ".R" -> "Rscript"
+        ".py" -> "python3"
+        _ -> "bash"
+      end
+
+    executable = System.find_executable(shell_command)
+
     if is_nil(executable) do
-      data =
-        data
-        |> Map.put(:message, "no executable for #{Path.basename(script_path)}")
-        |> Map.put(:status, "completed")
+      event_data =
+        base_data
+        |> Map.merge(%{
+          message: "no executable for #{Path.basename(script_path)}",
+          status: "completed",
+          errors: [
+            %{
+              message: "could not find executable #{shell_command}",
+              category: "shell",
+              system: true,
+              fatal: true
+            }
+          ],
+          time: LogWatcher.now()
+        })
 
-      _ = send_event(command_id, :no_executable, data)
+      _ = send_event(parent, :command_invalid, event_data)
 
-      {:error, data}
+      {:error, event_data}
     else
       shell_args =
         [
@@ -443,21 +514,54 @@ defmodule LogWatcher.ScriptRunner do
           "ScriptRunner #{command_id} shelling out to #{executable} with args #{inspect(shell_args)}"
         )
 
+      event_data =
+        base_data
+        |> Map.merge(%{
+          message: "Launching #{shell_command} for #{Path.basename(script_path)}",
+          status: "initializing",
+          time: LogWatcher.now()
+        })
+
+      # If `await_running` is false, this should send a reply back
+      # to the `client_from` CommandManager.
+      _ = send_event(parent, :command_launching, event_data)
+
       {output, exit_status} =
         System.cmd(executable, [script_path | shell_args], cd: Path.dirname(script_path))
 
       _ = Logger.debug("ScriptRunner #{command_id} script exited with #{exit_status}")
       _ = Logger.debug("ScriptRunner #{command_id} output from script: #{inspect(output)}")
 
-      data =
-        data
-        |> Map.put(:status, "completed")
-        |> Map.put(:exit_status, exit_status)
+      errors =
+        if exit_status == 0 do
+          %{message: "script exited normally"}
+        else
+          %{
+            message: "script exited with status #{exit_status}",
+            errors: [
+              %{
+                message: "#{shell_command} exited with non-zero status",
+                category: "shell",
+                system: true,
+                fatal: true
+              }
+            ]
+          }
+        end
+
+      event_data =
+        base_data
+        |> Map.merge(%{
+          status: "completed",
+          exit_status: exit_status,
+          time: LogWatcher.now()
+        })
+        |> Map.merge(errors)
         |> parse_result(output)
 
-      _ = send_event(command_id, :command_result, data)
+      _ = send_event(parent, :command_result, event_data)
 
-      {:ok, data}
+      {:ok, event_data}
     end
   end
 
@@ -472,6 +576,8 @@ defmodule LogWatcher.ScriptRunner do
       end
     end)
   end
+
+  @pre_running_event_types [:command_launching, :command_updated]
 
   defp handle_command_event(
          %{event_type: event_type} = event,
@@ -492,10 +598,12 @@ defmodule LogWatcher.ScriptRunner do
       end
 
     state =
-      if event_type == :command_updated && await_running do
+      if await_running && Enum.member?(@pre_running_event_types, event_type) do
+        # Don't send a reply if we have not entered running state
         state
       else
-        # :command_started, :command_result
+        # If `event_type` is something else (`:command_started` or `:command_result`)
+        # send it back to the client (CommandManager).
         maybe_send_reply(state, {:ok, event}, log_message: "#{event_type}")
       end
 
@@ -553,18 +661,18 @@ defmodule LogWatcher.ScriptRunner do
   end
 
   @spec parse_result(map(), String.t()) :: map()
-  defp parse_result(data, output) do
-    case String.split(output, "\n") |> get_last_json_line() do
-      nil -> Map.put(data, :message, output)
-      result -> Map.merge(data, result)
+  defp parse_result(event_data, output) do
+    case String.split(output, "\n") |> decode_last_json_line() do
+      nil -> Map.put(event_data, :message, output)
+      result -> Map.merge(event_data, result)
     end
   end
 
-  defp get_last_json_line(lines) do
+  defp decode_last_json_line(lines) do
     Enum.reduce(lines, nil, fn line, acc ->
       case Jason.decode(line, keys: :atoms) do
-        {:ok, data} when is_map(data) ->
-          data
+        {:ok, event_data} when is_map(event_data) ->
+          event_data
 
         _ ->
           acc
@@ -586,7 +694,7 @@ defmodule LogWatcher.ScriptRunner do
 
   @spec maybe_send_reply(state(), term(), Keyword.t()) :: state()
   defp maybe_send_reply(
-         %__MODULE__{command_id: command_id, awaiting_start: nil} = state,
+         %__MODULE__{command_id: command_id, client_from: nil} = state,
          _reply,
          opts
        ) do
@@ -594,14 +702,14 @@ defmodule LogWatcher.ScriptRunner do
     log_message = Keyword.get(opts, :log_message)
 
     if !fail_silently && !is_nil(log_message) do
-      _ = Logger.debug("ScriptRunner #{command_id} no_client for #{log_message}")
+      _ = Logger.error("ScriptRunner #{command_id} no_client for #{log_message}")
     end
 
     state
   end
 
   defp maybe_send_reply(
-         %__MODULE__{command_id: command_id, awaiting_start: from} = state,
+         %__MODULE__{command_id: command_id, client_from: from} = state,
          reply,
          opts
        ) do
@@ -609,12 +717,11 @@ defmodule LogWatcher.ScriptRunner do
 
     if !is_nil(log_message) do
       _ =
-        _ =
-        Logger.debug("ScriptRunner #{command_id} #{log_message} sending reply #{inspect(reply)}")
+        Logger.error("ScriptRunner #{command_id} #{log_message} sending reply #{inspect(reply)}")
     end
 
     _ = GenServer.reply(from, reply)
-    %__MODULE__{state | awaiting_start: nil}
+    %__MODULE__{state | client_from: nil}
   end
 
   @spec shutdown_and_remove_task(state()) ::

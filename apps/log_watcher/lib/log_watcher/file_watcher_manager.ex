@@ -24,8 +24,8 @@ defmodule LogWatcher.FileWatcherManager do
     GenServer.start_link(__MODULE__, arg, name: __MODULE__)
   end
 
-  def watch(session_id, command_id, file_path) do
-    GenServer.call(__MODULE__, {:watch, session_id, command_id, file_path})
+  def watch(session_id, command_id, command_name, file_path) do
+    GenServer.call(__MODULE__, {:watch, session_id, command_id, command_name, file_path})
   end
 
   def unwatch(file_path, cleanup \\ false) do
@@ -49,8 +49,8 @@ defmodule LogWatcher.FileWatcherManager do
 
   @doc false
   @impl true
-  def handle_call({:watch, session_id, command_id, file_path}, _from, state) do
-    {reply, state} = do_watch(session_id, command_id, file_path, state)
+  def handle_call({:watch, session_id, command_id, command_name, file_path}, _from, state) do
+    {reply, state} = do_watch(session_id, command_id, command_name, file_path, state)
     {:reply, reply, state}
   end
 
@@ -90,14 +90,14 @@ defmodule LogWatcher.FileWatcherManager do
 
   # Private functions
 
-  defp do_watch(session_id, command_id, file_path, state) do
+  defp do_watch(session_id, command_id, command_name, file_path, state) do
     log_dir = Path.dirname(file_path)
     {result, state} = find_or_add_watcher(log_dir, state)
 
     case result do
       :ok ->
         file_name = Path.basename(file_path)
-        watch_result = FileWatcher.watch(log_dir, session_id, command_id, file_name)
+        watch_result = FileWatcher.watch(log_dir, session_id, command_id, command_name, file_name)
         {watch_result, state}
 
       error ->

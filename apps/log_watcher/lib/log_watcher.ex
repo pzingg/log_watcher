@@ -10,6 +10,7 @@ defmodule LogWatcher do
   """
 
   alias LogWatcher.CommandManager
+  alias LogWatcher.Accounts
   alias LogWatcher.Commands
   alias LogWatcher.Sessions
 
@@ -18,8 +19,8 @@ defmodule LogWatcher do
   @doc """
   Format current UTC time as ISO8601 string with millisecond precision.
   """
-  @spec format_utcnow() :: String.t()
-  def format_utcnow() do
+  @spec now() :: String.t()
+  def now() do
     NaiveDateTime.utc_now()
     |> NaiveDateTime.truncate(:millisecond)
     |> NaiveDateTime.to_iso8601()
@@ -61,6 +62,28 @@ defmodule LogWatcher do
 
   def maybe_raise_input_error({:ok, data}, _label, _id_field), do: data
 
+  @script_dir Path.join([:code.priv_dir(:log_watcher), "mock_command"])
+  @session_base_dir Path.join([:code.priv_dir(:log_watcher), "mock_command", "sessions"])
+  @session_log_dir Path.join([
+                     :code.priv_dir(:log_watcher),
+                     "mock_command",
+                     "sessions",
+                     ":tag",
+                     "output"
+                   ])
+
+  def script_dir() do
+    Application.get_env(:log_watcher, :script_dir, @script_dir)
+  end
+
+  def session_base_dir() do
+    Application.get_env(:log_watcher, :session_base_dir, @session_base_dir)
+  end
+
+  def session_log_dir() do
+    Application.get_env(:log_watcher, :session_log_dir, @session_log_dir)
+  end
+
   @doc """
   Borrowed from Oban.Testing.
   Converts all atomic keys to strings, and verifies that args are JSON-encodable.
@@ -96,31 +119,46 @@ defmodule LogWatcher do
     CommandManager.start_script(session, command_id, command_name, command_args)
   end
 
-  def mock_command_base_dir() do
-    Path.join([:code.priv_dir(:log_watcher), "mock_command", "sessions"])
-  end
-
-  defp mock_tag() do
-    Ecto.ULID.generate()
-  end
-
   @doc """
   Create random arguments for a session and command.
   """
   @spec mock_command_args(String.t(), Keyword.t()) :: map()
   def mock_command_args(description, opts) do
-    tag = mock_tag()
-    log_dir = Path.join([mock_command_base_dir(), tag, "output"])
-    File.mkdir_p(log_dir)
-    gen = :rand.uniform(10) - 1
+    user_id =
+      case Keyword.get(opts, :user_id) do
+        id when is_binary(id) ->
+          id
+
+        _ ->
+          {:ok, user} =
+            Accounts.create_user(%{
+              first_name: Faker.Person.first_name(),
+              last_name: Faker.Person.last_name(),
+              email: Faker.Internet.email()
+            })
+
+          user.id
+      end
+
+    :ok = File.mkdir_p(LogWatcher.session_base_dir())
+
     session_name = to_string(description) |> String.slice(0..10) |> String.trim()
-    session = Sessions.create_session!(session_name, description, tag, log_dir, gen)
+
+    {:ok, session} =
+      Sessions.create_session(%{
+        user_id: user_id,
+        name: session_name,
+        description: description,
+        log_dir: LogWatcher.session_log_dir(),
+        gen: :rand.uniform(10) - 1
+      })
+
     script_file = Keyword.get(opts, :script_file, "mock_command.R")
-    script_path = Path.join([:code.priv_dir(:log_watcher), "mock_command", script_file])
+    script_path = Path.join(script_dir(), script_file)
 
     %{
       session: session,
-      command_id: Faker.Util.format("CMD%4d"),
+      command_id: Ecto.ULID.generate(),
       command_name: Faker.Util.pick(["create", "update", "generate", "analytics"]),
       command_args: %{
         script_path: script_path,

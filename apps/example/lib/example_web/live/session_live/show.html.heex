@@ -1,0 +1,45 @@
+<h1>Show Session</h1>
+
+<%= if @live_action in [:edit] do %>
+  <.modal return_to={Routes.session_show_path(@socket, :show, @session)}>
+    <.live_component
+      module={ExampleWeb.SessionLive.FormComponent}
+      id={@session.id}
+      title={@page_title}
+      action={@live_action}
+      session={@session}
+      return_to={Routes.session_show_path(@socket, :show, @session)}
+    />
+  </.modal>
+<% end %>
+
+<ul>
+  <li>
+    <strong>Name:</strong>
+    <%= @session.name %>
+  </li>
+
+  <li>
+    <strong>Description:</strong>
+    <%= @session.description %>
+  </li>
+
+  <li>
+    <strong>Gen:</strong>
+    <%= @session.gen %>
+  </li>
+
+  <li>
+    <strong>Tag:</strong>
+    <%= @session.tag %>
+  </li>
+
+  <li>
+    <strong>Log dir:</strong>
+    <%= @session.log_dir %>
+  </li>
+</ul>
+
+<span><%= live_redirect "Send command", role: "button", class: "button", to: Routes.command_new_path(@socket, :new, @session) %></span>
+<span><%= live_patch "Edit", to: Routes.session_show_path(@socket, :edit, @session), role: "button", class: "button" %></span> |
+<span><%= live_redirect "Back", to: Routes.session_index_path(@socket, :index) %></span>

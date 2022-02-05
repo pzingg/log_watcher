@@ -4,7 +4,7 @@ defmodule LogWatcher.MixProject do
   def project do
     [
       app: :log_watcher,
-      version: "0.1.0",
+      version: "0.2.0",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
@@ -57,11 +57,8 @@ defmodule LogWatcher.MixProject do
       {:phoenix, "~> 1.6.2"},
       {:phoenix_pubsub, "~> 2.0"},
       {:postgrex, "~> 0.15"},
-      {:translations, in_umbrella: true},
-      {:typed_struct, "~> 0.2"},
-      # {:typed_struct_ecto_changeset, "~> 0.1"}
-      {:typed_struct_ecto_changeset,
-       git: "git://github.com/pzingg/typed_struct_ecto_changeset.git"}
+      {:telemetry, "~> 1.0"},
+      {:translations, in_umbrella: true}
     ]
   end
 
@@ -69,9 +66,16 @@ defmodule LogWatcher.MixProject do
   #
   # See the documentation for `Mix` for more info on aliases.
   defp aliases do
+    ecto_setup =
+      if Mix.env() == :test do
+        ["ecto.create", "ecto.migrate"]
+      else
+        ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"]
+      end
+
     [
       setup: ["deps.get", "ecto.setup"],
-      "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
+      "ecto.setup": ecto_setup,
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"]
     ]

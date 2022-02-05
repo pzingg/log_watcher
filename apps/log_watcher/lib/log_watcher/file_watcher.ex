@@ -39,10 +39,11 @@ defmodule LogWatcher.FileWatcher do
   defmodule WatchedFile do
     @moduledoc false
 
-    @enforce_keys [:session_id, :command_id, :file_name, :stream]
+    @enforce_keys [:session_id, :command_id, :command_name, :file_name, :stream]
 
     defstruct session_id: nil,
               command_id: nil,
+              command_name: nil,
               file_name: nil,
               stream: nil,
               position: 0,
@@ -53,6 +54,7 @@ defmodule LogWatcher.FileWatcher do
     @type t :: %__MODULE__{
             session_id: String.t(),
             command_id: String.t(),
+            command_name: String.t(),
             file_name: String.t(),
             stream: File.Stream.t(),
             position: integer(),
@@ -64,11 +66,12 @@ defmodule LogWatcher.FileWatcher do
     @doc """
     Construct a `LogWatcher.WatchedFile` struct for a directory and file name.
     """
-    @spec new(String.t(), String.t(), String.t()) :: t()
-    def new(session_id, command_id, path) do
+    @spec new(String.t(), String.t(), String.t(), String.t()) :: t()
+    def new(session_id, command_id, command_name, path) do
       %__MODULE__{
         session_id: session_id,
         command_id: command_id,
+        command_name: command_name,
         file_name: Path.basename(path),
         stream: File.stream!(path)
       }
@@ -117,8 +120,8 @@ defmodule LogWatcher.FileWatcher do
   end
 
   @doc false
-  def watch(log_dir, session_id, command_id, file_name) do
-    GenServer.call(via_tuple(log_dir), {:watch, session_id, command_id, file_name})
+  def watch(log_dir, session_id, command_id, command_name, file_name) do
+    GenServer.call(via_tuple(log_dir), {:watch, session_id, command_id, command_name, file_name})
   end
 
   @doc false
@@ -135,10 +138,12 @@ defmodule LogWatcher.FileWatcher do
   end
 
   @doc """
-  Return the pid for a server.
+  Return the pid for this server.
   """
-  @spec whereis(String.t()) :: pid() | :undefined
-  def whereis(log_dir) do
+  @spec whereis(pid() | String.t()) :: pid() | :undefined
+  def whereis(pid) when is_pid(pid), do: pid
+
+  def whereis(log_dir) when is_binary(log_dir) do
     :gproc.where(registry_key(log_dir))
   end
 
@@ -195,14 +200,14 @@ defmodule LogWatcher.FileWatcher do
   end
 
   def handle_call(
-        {:watch, session_id, command_id, file_name},
+        {:watch, session_id, command_id, command_name, file_name},
         _from,
         %__MODULE__{log_dir: log_dir, files: files} = state
       ) do
     if Map.get(files, file_name) do
       {:reply, {:error, :already_watching}, state}
     else
-      file = WatchedFile.new(session_id, command_id, Path.join(log_dir, file_name))
+      file = WatchedFile.new(session_id, command_id, command_name, Path.join(log_dir, file_name))
       file = check_for_lines(file)
       _ = Logger.debug("FileWatcher watch added for #{file_name}")
       state = %__MODULE__{state | files: Map.put_new(files, file_name, file)}
@@ -374,33 +379,36 @@ defmodule LogWatcher.FileWatcher do
          %WatchedFile{
            session_id: session_id,
            command_id: command_id,
+           command_name: command_name,
            file_name: file_name,
            start_sent: start_sent
          } = file
        ) do
     case Jason.decode(line, keys: :atoms) do
-      {:ok, data} when is_map(data) ->
-        info =
-          data
+      {:ok, event_data} when is_map(event_data) ->
+        # Prefill all the required values
+        event_data =
+          event_data
           |> Map.put_new(:session_id, session_id)
           |> Map.put_new(:command_id, command_id)
+          |> Map.put_new(:command_name, command_name)
           |> Map.put_new(:status, "undefined")
           |> Map.put_new(:file_name, file_name)
 
-        _ = ScriptRunner.send_event(command_id, :command_updated, info)
+        _ = ScriptRunner.send_event(command_id, :command_updated, event_data)
 
         # :command_started is only sent after we have validated.
         # It will cause the ScriptRunner to exit the message loop and return.
         next_file =
-          if !start_sent && Enum.member?(@command_started_status, info.status) do
-            _ = ScriptRunner.send_event(command_id, :command_started, info)
+          if !start_sent && Enum.member?(@command_started_status, event_data.status) do
+            _ = ScriptRunner.send_event(command_id, :command_started, event_data)
             %WatchedFile{file | start_sent: true}
           else
             file
           end
 
-        if Enum.member?(@command_completed_status, info.status) do
-          _ = ScriptRunner.send_event(command_id, :command_completed, info)
+        if Enum.member?(@command_completed_status, event_data.status) do
+          _ = ScriptRunner.send_event(command_id, :command_completed, event_data)
         end
 
         next_file

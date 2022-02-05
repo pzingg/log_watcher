@@ -51,7 +51,7 @@ defmodule LogWatcher.Commands do
         %Session{id: session_id, log_dir: log_dir},
         include_archived \\ false
       ) do
-    log_files_for_session(log_dir, include_archived)
+    Command.all_log_files(log_dir, include_archived)
     |> Enum.map(fn log_file_path ->
       parse_log_file_name(session_id, log_file_path) |> Map.get("command_id")
     end)
@@ -62,13 +62,13 @@ defmodule LogWatcher.Commands do
         %Session{id: session_id, log_dir: log_dir},
         include_archived \\ false
       ) do
-    log_files_for_session(log_dir, include_archived)
+    Command.all_log_files(log_dir, include_archived)
     |> Enum.map(&create_command_from_file!(session_id, &1))
   end
 
   @spec get_command(Session.t(), String.t()) :: Command.t() | nil
   def get_command(%Session{id: session_id, log_dir: log_dir}, command_id) do
-    case log_files_for_command(log_dir, command_id) do
+    case Command.command_log_files(log_dir, command_id) do
       [] ->
         nil
 
@@ -92,7 +92,7 @@ defmodule LogWatcher.Commands do
 
   @spec archive_command(Session.t(), String.t()) :: [{String.t(), :ok | {:error, term()}}]
   def archive_command(%Session{log_dir: log_dir}, command_id) do
-    log_files = log_files_for_command(log_dir, command_id)
+    log_files = Command.command_log_files(log_dir, command_id)
 
     if Enum.empty?(log_files) do
       [{command_id, {:error, :not_found}}]
@@ -123,29 +123,41 @@ defmodule LogWatcher.Commands do
     with create_params <-
            parse_log_file_name(session_id, log_file_path),
          {:ok, command} <-
-           normalize_command_create_input(create_params)
+           change_create_command(create_params)
            |> Ecto.Changeset.apply_action(:insert),
          status_params <- read_command_status(command) do
-      normalize_command_update_status_input(command, status_params)
+      change_update_command_status(command, status_params)
       |> Ecto.Changeset.apply_action(:update)
     end
   end
 
-  @spec log_files_for_command(String.t(), String.t()) :: [String.t()]
-  defp log_files_for_command(log_dir, command_id) do
-    Path.join(log_dir, Command.log_file_glob(command_id))
-    |> Path.wildcard()
+  @doc """
+  Returns an `%Ecto.Changeset{}` for tracking initial command changes.
+
+  ## Examples
+
+      iex> change_create_command(command)
+      %Ecto.Changeset{data: %Command{}}
+
+  """
+  def change_create_command(%Command{} = command, attrs \\ %{}) do
+    Command.create_changeset(command, attrs)
   end
 
-  @spec log_files_for_command(String.t(), boolean()) :: [String.t()]
-  defp log_files_for_session(log_dir, include_archived) do
-    Path.join(log_dir, all_command_log_file_glob(include_archived))
-    |> Path.wildcard()
+  @doc """
+  Returns an `%Ecto.Changeset{}` for tracking command status changes.
+
+  ## Examples
+
+      iex> change_update_command_status(command)
+      %Ecto.Changeset{data: %Command{}}
+
+  """
+  def change_update_command_status(%Command{} = command, attrs \\ %{}) do
+    Command.update_status_changeset(command, attrs)
   end
 
-  @spec all_command_log_file_glob(boolean()) :: String.t()
-  defp all_command_log_file_glob(false), do: "*-log.jsonl"
-  defp all_command_log_file_glob(_), do: "*-log.json?"
+  # Private functions
 
   @spec parse_log_file_name(String.t(), String.t()) :: map()
   defp parse_log_file_name(session_id, log_file_path) do
@@ -180,64 +192,6 @@ defmodule LogWatcher.Commands do
 
       Map.merge(params, session_and_archive_params)
     end
-  end
-
-  @spec normalize_command_create_input(map()) :: Ecto.Changeset.t()
-  defp normalize_command_create_input(params) do
-    fields = [
-      :command_id,
-      :session_id,
-      :log_dir,
-      :log_prefix,
-      :command_name,
-      :gen,
-      :archived?
-    ]
-
-    Command.new()
-    |> Ecto.Changeset.cast(params, fields)
-    |> Ecto.Changeset.validate_required(Command.required_fields(fields))
-    |> validate_singleton_command_log_file()
-  end
-
-  @spec validate_singleton_command_log_file(Ecto.Changeset.t()) :: Ecto.Changeset.t()
-  defp validate_singleton_command_log_file(changeset) do
-    log_dir = Ecto.Changeset.get_change(changeset, :log_dir)
-    command_id = Ecto.Changeset.get_change(changeset, :command_id)
-    count = Enum.count(log_files_for_command(log_dir, command_id))
-
-    if count == 1 do
-      changeset
-    else
-      changeset
-      |> Ecto.Changeset.add_error(
-        :log_dir,
-        "%{count} log files exist for #{command_id} in directory",
-        count: count
-      )
-    end
-  end
-
-  @spec normalize_command_update_status_input(Command.t(), map()) :: Ecto.Changeset.t()
-  defp normalize_command_update_status_input(%Command{} = command, params) do
-    fields = [
-      :status,
-      :os_pid,
-      :progress_counter,
-      :progress_total,
-      :progress_phase,
-      :last_message,
-      :created_at,
-      :updated_at,
-      :running_at,
-      :completed_at,
-      :result,
-      :errors
-    ]
-
-    command
-    |> Ecto.Changeset.cast(params, fields)
-    |> Ecto.Changeset.validate_required(Command.required_fields(fields))
   end
 
   @spec read_command_status(Command.t()) :: map()

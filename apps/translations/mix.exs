@@ -4,7 +4,7 @@ defmodule Translations.MixProject do
   def project do
     [
       app: :translations,
-      version: "0.1.0",
+      version: "0.2.0",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
@@ -43,11 +43,7 @@ defmodule Translations.MixProject do
     [
       {:dotenvy, "~> 0.3"},
       {:ecto, "~> 3.6"},
-      {:gettext, "~> 0.18"},
-      {:typed_struct, "~> 0.2"},
-      # {:typed_struct_ecto_changeset, "~> 0.1"}
-      {:typed_struct_ecto_changeset,
-       git: "git://github.com/pzingg/typed_struct_ecto_changeset.git"}
+      {:gettext, "~> 0.18"}
     ]
   end
 

@@ -1,8 +1,9 @@
 defmodule LogWatcher.Commands.Command do
   @moduledoc """
   Defines a Command struct for use with schemaless changesets.
-  Tasks are not stored in a SQL database. Command states are stored and
-  maintained in JSON-encoded files.
+
+  Commands are not stored in a SQL database. Instead, command
+  states are stored and maintained in JSON-encoded files.
 
   Each command has a unique ID, the `:command_id` (usually a UUID or ULID).
 
@@ -25,56 +26,92 @@ defmodule LogWatcher.Commands.Command do
   The other command fields are updated by reading the log files
   produced by the command.
   """
+  use Ecto.Schema
 
-  use TypedStruct
+  import Ecto.Changeset
 
-  typedstruct do
-    @typedoc "A daptics command constructed from log files"
+  @type t() :: %__MODULE__{
+          command_id: String.t(),
+          session_id: String.t(),
+          log_dir: String.t(),
+          log_prefix: String.t(),
+          command_name: String.t(),
+          gen: integer(),
+          archived?: boolean(),
+          os_pid: integer(),
+          status: String.t(),
+          created_at: DateTime.t(),
+          updated_at: DateTime.t(),
+          running_at: DateTime.t() | nil,
+          completed_at: DateTime.t() | nil,
+          progress_counter: integer() | nil,
+          progress_total: integer() | nil,
+          progress_phase: String.t() | nil,
+          last_message: String.t() | nil,
+          result: term() | nil,
+          errors: [term()] | nil
+        }
 
-    plugin(TypedStructEctoChangeset)
-    field(:command_id, String.t(), enforce: true)
-    field(:session_id, String.t(), enforce: true)
-    field(:log_dir, String.t(), enforce: true)
-    field(:log_prefix, String.t(), enforce: true)
-    field(:command_name, String.t(), enforce: true)
-    field(:gen, integer(), enforce: true)
-    field(:archived?, boolean(), enforce: true)
-    field(:os_pid, integer(), enforce: true)
-    field(:status, String.t(), enforce: true)
-    field(:created_at, NaiveDateTime.t(), enforce: true)
-    field(:updated_at, NaiveDateTime.t(), enforce: true)
-    field(:running_at, NaiveDateTime.t())
-    field(:completed_at, NaiveDateTime.t())
-    field(:progress_counter, integer())
-    field(:progress_total, integer())
-    field(:progress_phase, String.t())
-    field(:last_message, String.t())
-    field(:result, term())
-    field(:errors, [term()], default: [])
+  @primary_key false
+  embedded_schema do
+    field(:command_id, :string, null: false)
+    field(:session_id, :string, null: false)
+    field(:log_dir, :string, null: false)
+    field(:log_prefix, :string, null: false)
+    field(:command_name, :string, null: false)
+    field(:gen, :integer, null: false, default: -1)
+    field(:archived?, :boolean, null: false, default: false)
+    field(:os_pid, :integer, null: false, default: 0)
+    field(:status, :string, null: false)
+    field(:created_at, :utc_datetime, null: false)
+    field(:updated_at, :utc_datetime, null: false)
+    field(:running_at, :utc_datetime)
+    field(:completed_at, :utc_datetime)
+    field(:progress_counter, :integer)
+    field(:progress_total, :integer)
+    field(:progress_phase, :string)
+    field(:last_message, :string)
+    field(:result, :map)
+    field(:errors, {:array, :map}, null: false, default: [])
   end
 
-  @spec new() :: t()
-  def new() do
-    nil_values =
-      @enforce_keys
-      |> Enum.map(fn key -> {key, nil} end)
-
-    Kernel.struct(__MODULE__, nil_values)
+  def create_changeset(command, params) do
+    command
+    |> cast(params, [
+      :command_id,
+      :session_id,
+      :log_dir,
+      :log_prefix,
+      :command_name,
+      :gen,
+      :archived?
+    ])
+    |> validate_required([:command_id, :session_id, :log_dir, :log_prefix, :command_name, :gen])
+    |> validate_singleton_command_log_file()
   end
 
-  @spec required_fields([atom()]) :: [atom()]
-  def required_fields(fields \\ [])
-  def required_fields([]), do: @enforce_keys
-
-  def required_fields(fields) when is_list(fields) do
-    @enforce_keys -- @enforce_keys -- fields
+  def update_status_changeset(command, params) do
+    command
+    |> cast(params, [
+      :status,
+      :os_pid,
+      :progress_counter,
+      :progress_total,
+      :progress_phase,
+      :last_message,
+      :created_at,
+      :updated_at,
+      :running_at,
+      :completed_at,
+      :result,
+      :errors
+    ])
+    |> validate_required([
+      :status,
+      :last_message,
+      :updated_at
+    ])
   end
-
-  @spec all_fields() :: [atom()]
-  def all_fields(), do: Keyword.keys(@changeset_fields)
-
-  @spec changeset_types() :: [{atom(), atom()}]
-  def changeset_types(), do: @changeset_fields
 
   # See https://medium.com/very-big-things/towards-maintainable-elixir-the-core-and-the-interface-c267f0da43
   # for tips on architecting schemaless changesets, input normalization, and contexts.
@@ -98,9 +135,14 @@ defmodule LogWatcher.Commands.Command do
     "*#{command_id}-log.json?"
   end
 
+  @spec log_file_glob(t()) :: String.t()
   def log_file_glob(%__MODULE__{command_id: command_id}) do
     "*#{command_id}-log.json?"
   end
+
+  @spec all_log_file_glob(boolean()) :: String.t()
+  defp all_log_file_glob(false), do: "*-log.jsonl"
+  defp all_log_file_glob(_), do: "*-log.json?"
 
   @spec log_file_name(String.t(), integer(), String.t(), String.t(), boolean()) :: String.t()
   def log_file_name(session_id, gen, command_id, command_name, is_archived \\ false) do
@@ -136,4 +178,36 @@ defmodule LogWatcher.Commands.Command do
   @spec log_extension(boolean()) :: String.t()
   def log_extension(true), do: "jsonx"
   def log_extension(_), do: "jsonl"
+
+  # Private functions
+
+  @spec validate_singleton_command_log_file(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  defp validate_singleton_command_log_file(changeset) do
+    log_dir = get_change(changeset, :log_dir)
+    command_id = get_change(changeset, :command_id)
+    count = Enum.count(command_log_files(log_dir, command_id))
+
+    if count == 1 do
+      changeset
+    else
+      add_error(
+        changeset,
+        :log_dir,
+        "%{count} log files exist for #{command_id} in directory",
+        count: count
+      )
+    end
+  end
+
+  @spec command_log_files(String.t(), String.t()) :: [String.t()]
+  def command_log_files(log_dir, command_id) do
+    Path.join(log_dir, log_file_glob(command_id))
+    |> Path.wildcard()
+  end
+
+  @spec all_log_files(String.t(), boolean()) :: [String.t()]
+  def all_log_files(log_dir, include_archived) do
+    Path.join(log_dir, all_log_file_glob(include_archived))
+    |> Path.wildcard()
+  end
 end

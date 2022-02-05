@@ -36,9 +36,9 @@ defmodule LogWatcher.DataCase do
 
     if tags[:async] do
       raise "Don't use async: true"
-    end
-
-    unless tags[:async] do
+      Ecto.Adapters.SQL.Sandbox.mode(LogWatcher.Repo, :manual)
+    else
+      # _ = Logger.error("setting shared sandbox mode for #{inspect(self())}")
       Ecto.Adapters.SQL.Sandbox.mode(LogWatcher.Repo, {:shared, self()})
     end
 
@@ -63,10 +63,10 @@ defmodule LogWatcher.DataCase do
 
   @spec assert_script_started(term(), String.t()) :: {reference(), [term()]}
   def assert_script_started(start_result, command_id) do
-    {:ok, %{command_id: job_task_id, status: status, message: message, task_ref: task_ref}} =
+    {:ok, %{command_id: script_command_id, status: status, message: message, task_ref: task_ref}} =
       start_result
 
-    assert job_task_id == command_id
+    assert script_command_id == command_id
     assert status == "running"
     assert String.contains?(message, "running on line")
     task_ref
@@ -81,10 +81,10 @@ defmodule LogWatcher.DataCase do
         expected_status \\ "completed"
       ) do
     {:ok,
-     %{command_id: job_task_id, status: status, message: _message, task_ref: task_ref} = info} =
-      start_result
+     %{command_id: script_command_id, status: status, message: _message, task_ref: task_ref} =
+       info} = start_result
 
-    assert job_task_id == command_id
+    assert script_command_id == command_id
     assert status == expected_status
     errors = get_in(info, [:result, :errors])
     assert !is_nil(errors)
@@ -140,5 +140,9 @@ defmodule LogWatcher.DataCase do
     end
   end
 
-  def await_pipeline(), do: Process.sleep(100)
+  # Beware that if the test process terminates while the worker is using
+  # the connection, the connection will be taken away from the worker,
+  # which will error. Therefore it is important to guarantee the work is
+  # done before the test concludes.
+  def await_pipeline(), do: Process.sleep(500)
 end

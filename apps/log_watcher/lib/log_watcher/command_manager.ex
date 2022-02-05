@@ -37,11 +37,17 @@ defmodule LogWatcher.CommandManager do
   end
 
   def start_script(session, command_id, command_name, command_args) do
-    GenServer.call(__MODULE__, {:start_script, session, command_id, command_name, command_args})
+    timeout = Map.get(command_args, :timeout, 5000)
+
+    GenServer.call(
+      __MODULE__,
+      {:start_script, session, command_id, command_name, command_args},
+      timeout + 100
+    )
   end
 
   def await(key, timeout) when is_integer(timeout) do
-    GenServer.call(__MODULE__, {:await, key, timeout}, timeout + 1000)
+    GenServer.call(__MODULE__, {:await, key, timeout}, timeout + 100)
   end
 
   def cancel(key) do
@@ -66,13 +72,14 @@ defmodule LogWatcher.CommandManager do
   @doc false
   @impl true
   def handle_call({:start_script, session, command_id, command_name, command_args}, from, state) do
+    timeout = Map.get(command_args, :timeout, 5000)
     await_running = Map.get(command_args, :await_running, true)
     job_id = Map.get(command_args, :oban_job_id, 0)
 
     case CommandSupervisor.start_script_runner(session, command_id, command_name, command_args) do
       {:ok, _pid} ->
         state = [%__MODULE__{command_id: command_id, job_id: job_id} | state]
-        send(self(), {:run_script, from, command_id, await_running})
+        send(self(), {:run_script, from, command_id, await_running, timeout})
         {:noreply, state}
 
       :ignore ->
@@ -104,10 +111,14 @@ defmodule LogWatcher.CommandManager do
     end
   end
 
-  @doc false
+  @doc """
+  The `:run_script` message does a sync call to the ScriptRunner process for
+  this command, which may not return immediately (depending on the
+  `:await_running` setting).
+  """
   @impl true
-  def handle_info({:run_script, from, command_id, await_running}, state) do
-    reply = ScriptRunner.run_script(command_id, await_running)
+  def handle_info({:run_script, from, command_id, await_running, timeout}, state) do
+    reply = ScriptRunner.run_script(command_id, await_running, timeout)
     GenServer.reply(from, reply)
     {:noreply, state}
   end

@@ -8,6 +8,10 @@ defmodule LogWatcher.Pipeline.Handler do
 
   require Logger
 
+  alias LogWatcher.Accounts.User
+  alias LogWatcher.Sessions
+  alias LogWatcher.Sessions.Session
+
   @doc """
   Sends an event to the producer and returns only after the event is dispatched.
   Transforms incoming event to a Broadway message.
@@ -44,13 +48,25 @@ defmodule LogWatcher.Pipeline.Handler do
   @doc """
   Process the data in an incoming message by inserting the event into
   the database. If the insert is successful, the event is broadcast
-  over its topic.
+  over its topics.
   """
   def process_data(data) do
-    case LogWatcher.Sessions.create_event_from_log_watcher(data) do
-      {:ok, event} ->
-        _ = Phoenix.PubSub.broadcast(LogWatcher.PubSub, event.topic, event)
+    with {:ok, event} <- LogWatcher.Sessions.create_event_from_log_watcher(data),
+         {:ok, event} <- Sessions.load_event_user_and_session(event) do
+      _ =
+        Phoenix.PubSub.broadcast(
+          LogWatcher.PubSub,
+          Session.session_topic(event.session),
+          {:event, event}
+        )
 
+      _ =
+        Phoenix.PubSub.broadcast(
+          LogWatcher.PubSub,
+          User.user_topic(event.session.user),
+          {:event, event}
+        )
+    else
       {:error, changeset} ->
         _ = Logger.debug("Failed to insert event #{inspect(changeset.errors)}")
     end

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 import datetime
 import json
 import os
@@ -246,16 +247,22 @@ def run_command():
     'status': 'created',
     'message': f'Command {command_id} created'
   }
-  print(f'mock_command, writing initial log file')
+
+  jcat('writing initial log file')
   log_info(info, log_file_path, initial = True)
   log_event('command_created', info)
 
   signal.signal(signal.SIGINT, cancel_command)
 
   arg_file = arg_file_name(session_id, gen, command_id, command_name)
-  info, command_args = read_arg_file(info, arg_file)
+  try:
+    info, command_args = read_arg_file(info, arg_file)
+  except:
+    set_script_status('completed')
+    jcat(f'could not parse args from {arg_file}')
+    sys.exit(1)
 
-  print(f'mock_command, command_args are {command_args}')
+  jcat(f'command_args are {command_args}')
   log_info(info, log_file_path)
 
   sleep_time = 1.0
@@ -291,24 +298,47 @@ def run_command():
       write_result = True
 
     if write_start:
-      print(f'mock_command, writing start file')
+      jcat('writing start file')
       start_file = start_file_name(session_id, gen, command_id, command_name)
       write_start_file(start_file, info)
       write_start = False
       sleep_time = 0.25
 
     if write_result and result_file is not None:
-      print(f'mock_command, writing result file')
+      jcat('writing result file')
       write_result_file(result_file, info, result)
       write_result = False
 
     log_info(info, log_file_path)
     if write_result:
-      break
+      if error == 'forever':
+        jcat('running forever...')
+        while True:
+          time.sleep(sleep_time)
+      else:
+        break
+    else:
+      time.sleep(sleep_time)
 
-    time.sleep(sleep_time)
+  jcat('closing log file')
 
-  print(f'mock_command, closing log file')
+def jcat(message):
+  global _global_args
+  if type(message) is dict:
+    message_data = message
+  else:
+    message_data = {
+      'time': format_utcnow(),
+      'message': message.strip(),
+      'status': _global_args['status']
+    }
+  print(to_json_line(message_data, append_newline = False))
+
+def to_json_line(data, append_newline = True):
+  line = json.dumps(data)
+  if append_newline:
+    line = line + '\n'
+  return line
 
 def log_info(info, log_file_path, initial = False, suppress_exception = False):
   mode = 'wt' if initial else 'at'
@@ -321,24 +351,35 @@ def log_info(info, log_file_path, initial = False, suppress_exception = False):
     if initial and not suppress_exception:
       raise RuntimeError(f'cannot open log file {log_file_path}')
     else:
-      print(json.dumps(info))
+      jcat(info, info)
 
 if __name__ == '__main__':
   import argparse
 
+  # In Python 3.9, we can use exit_on_error = False
   parser = argparse.ArgumentParser(description='Run a session command')
   parser.add_argument('-p', '--log-dir', help='directory containing log file', required=True)
   parser.add_argument('-s', '--session-id', help='session id', required=True)
   parser.add_argument('-i', '--command-id', help='command id', required=True)
-  parser.add_argument('-n', '--command-name', help='command name', required=True)
+  parser.add_argument('-n', '--command-name', help='command name', choices = ['create', 'update', 'generate', 'analytics'], required=True)
   parser.add_argument('-g', '--gen', help='gen', type=int, required=True)
   parser.add_argument('-e', '--error', help='phase in which to generate error result')
-  args = parser.parse_args()
+
+  try:
+    args = parser.parse_args()
+  except argparse.ArgumentError as e:
+    _global_args = {}
+    _global_args['os_pid'] = os_pid = os.getpid()
+    _global_args['status'] = 'initializing'
+    _global_args['log_f'] = None
+    jcat(f'invalid arguments: {e}')
+    sys.exit(1)
+
   _global_args = vars(args)
   _global_args['os_pid'] = os_pid = os.getpid()
   _global_args['status'] = 'initializing'
   _global_args['log_f'] = None
-  print(f'script started. cancel with:\n  kill -s INT {os_pid}')
+  jcat(f'script started. cancel with:\n  kill -s INT {os_pid}')
   try:
     run_command()
   except CancelException:

@@ -1,0 +1,40 @@
+<div>
+  <h2><%= @page_title %></h2>
+
+  <.form
+    let={f}
+    for={@changeset}
+    as="request"
+    id="request-form"
+    phx-change="validate"
+    phx-submit="save">
+
+    <%= label f, :command_id, "Id" %>
+    <%= text_input f, :command_id, disabled: true %>
+    <%= error_tag f, :command_id %>
+
+    <%= label f, :command_name %>
+    <%= select f, :command_name, ["create", "update", "generate", "analytics"] %>
+    <%= error_tag f, :command_name %>
+
+    <%= label f, :script_file %>
+    <%= select f, :script_file, ["mock_command.R", "mock_task.py"] %>
+    <%= error_tag f, :script_file %>
+
+    <%= label f, :space_type %>
+    <%= select f, :space_type, ["mixture", "factorial", "sparsefactorial"] %>
+    <%= error_tag f, :space_type %>
+
+    <%= label f, :error %>
+    <%= select f, :error, ["", "initializing", "created", "reading", "validating", "running", "completed"] %>
+    <%= error_tag f, :error %>
+
+    <%= label f, :num_lines %>
+    <%= number_input f, :num_lines, required: true %>
+    <%= error_tag f, :num_lines %>
+
+    <div>
+      <%= submit "Send command", role: "button", class: "button", phx_disable_with: "Sending..." %>
+    </div>
+  </.form>
+</div>

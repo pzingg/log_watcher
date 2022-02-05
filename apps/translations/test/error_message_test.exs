@@ -2,29 +2,18 @@ defmodule Translations.ErrorMessageTest do
   use ExUnit.Case
 
   defmodule TestSession do
-    use TypedStruct
+    use Ecto.Schema
 
-    typedstruct do
-      @typedoc "A test structure"
-
-      plugin(TypedStructEctoChangeset)
-      field(:log_dir, String.t(), enforce: true)
+    @primary_key false
+    embedded_schema do
+      field :log_dir, :string, null: false
     end
 
-    @spec new() :: t()
-    def new() do
-      nil_values =
-        @enforce_keys
-        |> Enum.map(fn key -> {key, nil} end)
-
-      Kernel.struct(__MODULE__, nil_values)
-    end
-
-    def required_fields(fields \\ [])
-    def required_fields([]), do: @enforce_keys
-
-    def required_fields(fields) when is_list(fields) do
-      @enforce_keys -- @enforce_keys -- fields
+    def changeset(%__MODULE__{} = session, params) do
+      session
+      |> Ecto.Changeset.cast(params, [:log_dir])
+      |> Ecto.Changeset.validate_required([:log_dir])
+      |> Ecto.Changeset.validate_length(:log_dir, max: 20)
     end
   end
 
@@ -46,10 +35,8 @@ defmodule Translations.ErrorMessageTest do
     fields = [:log_dir]
 
     {:error, changeset} =
-      TestSession.new()
-      |> Ecto.Changeset.cast(params, fields)
-      |> Ecto.Changeset.validate_required(TestSession.required_fields(fields))
-      |> Ecto.Changeset.validate_length(:log_dir, max: 20)
+      %TestSession{}
+      |> TestSession.changeset(params)
       |> Ecto.Changeset.apply_action(:insert)
 
     messages = Translations.changeset_error_messages(changeset)

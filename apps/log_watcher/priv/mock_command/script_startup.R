@@ -3,6 +3,12 @@ library(argparser, quietly = TRUE)
 
 source("json_logging.R")
 
+stop_if_empty <- function(x, item) {
+  if (!(length(x) == 1 && nzchar(x))) {
+    stop(paste0("missing argument ", item))
+  }
+}
+
 #' Startup procedure for Rscript- or littler-based API
 #'
 #' \code{start_script} Loads libraries, parses command line arguments,
@@ -33,12 +39,12 @@ start_script <- function() {
   p <- argparser::arg_parser("daptics rscript")
 
   # Add command line arguments. If not specified, missing args default to NA.
-  p <- argparser::add_argument(p, "--log-dir", "directory containing log file", short = "p")
-  p <- argparser::add_argument(p, "--session-id", "session id", short = "s")
-  p <- argparser::add_argument(p, "--command-id", "command id", short = "i")
-  p <- argparser::add_argument(p, "--command-name", "command name", short = "n")
-  p <- argparser::add_argument(p, "--gen", "gen", short = "g", type = "integer")
-  p <- argparser::add_argument(p, "--error", "phase in which to generate error result", short = "e", default = "none")
+  p <- argparser::add_argument(p, "--log-dir", "directory containing log file", short = "-p")
+  p <- argparser::add_argument(p, "--session-id", "session id", short = "-s")
+  p <- argparser::add_argument(p, "--command-id", "command id", short = "-i")
+  p <- argparser::add_argument(p, "--command-name", "command name", short = "-n")
+  p <- argparser::add_argument(p, "--gen", "gen", short = "-g", type = "integer")
+  p <- argparser::add_argument(p, "--error", "phase in which to generate error result", short = "-e", default = "none")
 
   # Rscript function
   pa <- script_path_and_argv()
@@ -51,14 +57,18 @@ start_script <- function() {
   if (identical(args$error, "initializing")) {
     stop("arg-blowup")
   } else {
-    jcat("parsed script args\n")
+    jcat("parsed script args")
   }
 
-  stopifnot(length(args$log_dir) == 1)
-  stopifnot(length(args$session_id) == 1)
-  stopifnot(length(args$command_id) == 1)
-  stopifnot(length(args$command_name) == 1)
-  stopifnot(length(args$gen) == 1)
+  stop_if_empty(args$log_dir, "log_dir")
+  stop_if_empty(args$session_id, "session_id")
+  stop_if_empty(args$command_id, "command_id")
+  stop_if_empty(args$command_name, "command_name")
+  valid_names <- c("create", "update", "generate", "analytics")
+  if (!(args$command_name %in% valid_names)) {
+    stop("invalid argument -n/--command-name (choose from 'create', 'update', 'generate', 'analytics')")
+  }
+  stop_if_empty(args$gen, "gen")
 
   # Save session and command data in R options
   context <- list(

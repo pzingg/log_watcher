@@ -38,7 +38,7 @@ defmodule LogWatcher.Pipeline do
   # Callbacks
 
   @impl true
-  def handle_message(_default_processor, %Message{data: data} = message, _context) do
+  def handle_message(_default_processor, message, _context) do
     next_message = Message.update_data(message, &LogWatcher.Pipeline.Handler.process_data/1)
 
     batchers = Broadway.topology(__MODULE__)[:batchers]

@@ -61,7 +61,7 @@ jcat <- function(message) {
   } else {
     message_data <- message
   }
-  cat(to_json_line(message_data))
+  # cat(to_json_line(message_data))
 }
 
 to_json_line <- function(data, append_newline = TRUE) {
@@ -109,7 +109,7 @@ setup_logging <- function(args) {
   log_file_path <- file.path(args$log_dir, log_file)
   init_logging(log_file_path)
 
-  jcat(paste0("logging setup done, will append to ", log_file_path, "\n"))
+  jcat(paste0("logging setup done, will append to ", log_file_path))
 
   invisible(log_file_path)
 }
@@ -295,6 +295,18 @@ log_error <- function(cond, args) {
 }
 
 read_arg_file <- function(arg_path) {
+  suppressWarnings(tryCatch(do_read_arg_file(arg_path), error = function(e) {
+    list(
+      status = "completed",
+      message = "invalid arguments",
+      errors = e
+    )
+  }))
+}
+
+do_read_arg_file <- function(arg_path) {
+  set_script_status("reading")
+
   args <- jsonlite::read_json(arg_path, simplifyVector = TRUE)
   command_id <- args$command_id
 
@@ -317,14 +329,11 @@ read_arg_file <- function(arg_path) {
   args["command_name"] <- NULL
   args["gen"] <- NULL
 
-  res <- list(
-    status = "validating",
-    message = paste0("Task ", command_id, " parsed ", length(args), " args"),
+  list(
+    status = "reading",
+    message = paste0("Command ", command_id, " parsed ", length(args), " args"),
     args = args
   )
-
-  set_script_status("validating")
-  res
 }
 
 write_start_file <- function(start_file, info) {

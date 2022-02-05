@@ -6,9 +6,9 @@ defmodule LogWatcherUmbrella.MixProject do
     [
       app: :log_watcher_umbrella,
       apps_path: "apps",
-      apps: [:log_watcher],
-      version: "0.1.0",
-      elixir: "~> 1.11",
+      apps: [:translations, :log_watcher, :example],
+      version: "0.2.0",
+      elixir: "~> 1.12",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       releases: []

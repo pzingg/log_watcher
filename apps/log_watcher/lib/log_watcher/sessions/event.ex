@@ -6,14 +6,15 @@ defmodule LogWatcher.Sessions.Event do
 
   import Ecto.Changeset
 
+  alias LogWatcher.Accounts.User
+  alias LogWatcher.Sessions
   alias LogWatcher.Sessions.Session
 
   @typedoc """
   Definition of the Event struct.
   * :id - Identifier
-  * :transaction_id - Transaction identifier, if event belongs to a transaction
+  * :command_id - Transaction identifier, if event belongs to a transaction
   * :version - Version number
-  * :topic - Topic name
   * :data - Context
   * :ttl - Time to live value
   * :source - Who created this event: module, function or service name are good
@@ -23,29 +24,29 @@ defmodule LogWatcher.Sessions.Event do
   @type t :: %__MODULE__{
           id: integer(),
           version: integer(),
-          topic: String.t(),
           type: String.t(),
           source: String.t() | nil,
           data: any(),
+          session: LogWatcher.Schema.session_assoc(),
           session_id: Ecto.ULID.t(),
-          transaction_id: String.t(),
+          command_id: String.t(),
           ttl: integer() | nil,
-          initialized_at: DateTime.t() | nil,
-          occurred_at: DateTime.t() | nil
+          initialized_at: DateTime.t(),
+          occurred_at: DateTime.t()
         }
 
   @primary_key {:id, :id, autogenerate: true}
-  @timestamps_opts [type: :utc_datetime, inserted_at: false, updated_at: :occurred_at]
+  @timestamps_opts [type: :utc_datetime, inserted_at: :occurred_at, updated_at: false]
   schema "events" do
     field(:version, :integer)
-    field(:topic, :string)
     field(:type, :string)
     field(:source, :string)
     field(:data, :map)
-    field(:session_id, Ecto.ULID)
-    field(:transaction_id, :string)
+    field(:command_id, :string)
     field(:ttl, :integer)
     field(:initialized_at, :utc_datetime)
+
+    belongs_to(:session, Session, type: Ecto.ULID, on_replace: :update)
 
     timestamps()
   end
@@ -67,30 +68,29 @@ defmodule LogWatcher.Sessions.Event do
     0
   end
 
-  @spec session_topic(String.t() | t()) :: String.t()
-  def session_topic(session_id) when is_binary(session_id) do
-    "session:#{session_id}"
-  end
-
-  def session_topic(%Session{id: session_id}) do
-    "session:#{session_id}"
-  end
-
   @doc false
   def changeset(event, attrs) do
     event
     |> cast(attrs, [
+      :session_id,
+      :command_id,
       :version,
-      :topic,
       :type,
       :source,
       :data,
-      :session_id,
-      :transaction_id,
       :ttl,
       :initialized_at
     ])
-    |> validate_required([:topic, :data])
+    |> validate_required([
+      :session_id,
+      :command_id,
+      :version,
+      :type,
+      :source,
+      :data,
+      :initialized_at
+    ])
+    |> assoc_constraint(:session)
   end
 
   # %{
@@ -107,7 +107,7 @@ defmodule LogWatcher.Sessions.Event do
   #  started_at: "2022-01-25T11:49:28",
   #  status: "started",
   #  command_id: "T4021",
-  #  name: "update",
+  #  command_name: "update",
   #  time: "2022-01-25T11:49:28"
   # }
   def log_watcher_changeset(event, %{event_type: event_type} = attrs) do
@@ -116,22 +116,20 @@ defmodule LogWatcher.Sessions.Event do
     {attrs, data} =
       attrs
       |> Map.drop([:task_ref, :event_type])
-      |> Map.split([:session_id, :name, :command_id, :time])
+      |> Map.split([:session_id, :command_name, :command_id, :time])
 
     session_id = Map.fetch!(attrs, :session_id)
-    topic = session_topic(session_id)
     command_id = Map.get(attrs, :command_id)
-    name = Map.get(attrs, :name)
+    command_name = Map.get(attrs, :command_name, "undefined")
 
     attrs =
       attrs
       |> Map.merge(%{
         version: 1,
         type: event_type,
-        topic: topic,
-        source: name,
+        source: command_name,
         session_id: session_id,
-        transaction_id: command_id,
+        command_id: command_id,
         data: data,
         initialized_at: Map.get_lazy(attrs, :time, fn -> DateTime.utc_now() end)
       })

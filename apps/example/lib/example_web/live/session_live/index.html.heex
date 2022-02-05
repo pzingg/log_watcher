@@ -1,0 +1,43 @@
+<h1>Listing <%= LogWatcher.Accounts.User.full_name(@current_user) %>'s sessions</h1>
+
+<%= if @live_action in [:new, :edit] do %>
+  <.modal return_to={Routes.session_index_path(@socket, :index)}>
+    <.live_component
+      module={ExampleWeb.SessionLive.FormComponent}
+      id={@session.id || :new}
+      title={@page_title}
+      action={@live_action}
+      session={@session}
+      return_to={Routes.session_index_path(@socket, :index)}
+    />
+  </.modal>
+<% end %>
+
+<table>
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Description</th>
+      <th>Tag</th>
+      <th>Gen</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody id="sessions">
+    <%= for session <- @sessions do %>
+      <tr id={"session-#{session.id}"}>
+        <td><%= session.name %></td>
+        <td><%= session.description %></td>
+        <td><%= session.tag %></td>
+        <td><%= session.gen %></td>
+        <td>
+          <span><%= live_redirect "Show", to: Routes.session_show_path(@socket, :show, session) %></span>
+          <span><%= live_patch "Edit", to: Routes.session_index_path(@socket, :edit, session) %></span>
+          <span><%= link "Delete", to: "#", phx_click: "delete", phx_value_id: session.id, data: [confirm: "Are you sure?"] %></span>
+        </td>
+      </tr>
+    <% end %>
+  </tbody>
+</table>
+
+<span><%= live_patch "New Session", to: Routes.session_index_path(@socket, :new) %></span>

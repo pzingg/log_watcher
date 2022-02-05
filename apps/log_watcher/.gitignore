@@ -23,4 +23,4 @@ erl_crash.dump
 log_watcher-*.tar
 
 # Tests put output here
-/priv/mock_command/sessions/
+priv/mock_command/sessions/
