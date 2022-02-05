@@ -7,8 +7,6 @@ defmodule ExampleWeb.InitAssigns do
   import ExampleWeb.LiveHelpers, only: [init_notifications: 1]
 
   alias LogWatcher.Accounts
-  alias LogWatcher.Accounts.User
-
   def on_mount(:default, _params, _session, socket) do
     {:cont, assign(socket, page_title: "Example!") |> init_notifications()}
   end

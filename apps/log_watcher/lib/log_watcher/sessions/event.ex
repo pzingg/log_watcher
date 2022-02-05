@@ -6,8 +6,6 @@ defmodule LogWatcher.Sessions.Event do
 
   import Ecto.Changeset
 
-  alias LogWatcher.Accounts.User
-  alias LogWatcher.Sessions
   alias LogWatcher.Sessions.Session
 
   @typedoc """
