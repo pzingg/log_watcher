@@ -3,8 +3,47 @@ library(argparser, quietly = TRUE)
 
 source("json_logging.R")
 
+# From rapportools
+vgsub <- function(pattern, replacement, x, ...){
+    for(i in 1:length(pattern))
+        x <- gsub(pattern[i], replacement[i], x, ...)
+    x
+}
+
+trim.space <- function(x, what = c("both", "leading", "trailing", "none"), space.regex = "[:space:]", ...){
+    if (missing(x))
+        stop("nothing to trim spaces to =(")
+    re <- switch(match.arg(what),
+                 both     = sprintf("^[%s]+|[%s]+$", space.regex, space.regex),
+                 leading  = sprintf("^[%s]+", space.regex),
+                 trailing = sprintf("[%s]+$", space.regex),
+                 none     = {
+                     return (x)
+                 })
+    vgsub(re, "", x, ...)
+}
+
+is.empty <- function(x, trim = TRUE, zero_is_empty = TRUE, ...) {
+    if (length(x) <= 1) {
+        if (is.null(x))
+            return (TRUE)
+        if (length(x) == 0)
+            return (TRUE)
+        if (is.na(x) || is.nan(x))
+            return (TRUE)
+        if (is.character(x) && nchar(ifelse(trim, trim.space(x), x)) == 0)
+            return (TRUE)
+        if (is.logical(x) && !isTRUE(x))
+            return (TRUE)
+        if (zero_is_empty && is.numeric(x) && x == 0)
+            return (TRUE)
+        return (FALSE)
+    } else
+        sapply(x, is.empty, trim = trim, ...)
+}
+
 stop_if_empty <- function(x, item) {
-  if (!(length(x) == 1 && nzchar(x))) {
+  if (is.empty(x, zero_is_empty = FALSE)) {
     stop(paste0("missing argument ", item))
   }
 }
@@ -44,7 +83,7 @@ start_script <- function() {
   p <- argparser::add_argument(p, "--command-id", "command id", short = "-i")
   p <- argparser::add_argument(p, "--command-name", "command name", short = "-n")
   p <- argparser::add_argument(p, "--gen", "gen", short = "-g", type = "integer")
-  p <- argparser::add_argument(p, "--error", "phase in which to generate error result", short = "-e", default = "none")
+  p <- argparser::add_argument(p, "--error", "phase in which to automatically generate error result", short = "-e", default = "none")
 
   # Rscript function
   pa <- script_path_and_argv()

@@ -163,8 +163,8 @@ defmodule LogWatcher do
       command_args: %{
         script_path: script_path,
         error: Keyword.get(opts, :error, ""),
-        cancel: Keyword.get(opts, :cancel, false),
-        num_lines: :rand.uniform(6) + 6,
+        cancel: Keyword.get(opts, :cancel, ""),
+        num_lines: Keyword.get(opts, :num_lines, :rand.uniform(6) + 6),
         space_type: Faker.Util.pick(["mixture", "factorial", "sparsefactorial"])
       }
     }

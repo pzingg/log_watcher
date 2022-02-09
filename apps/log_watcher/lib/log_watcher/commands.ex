@@ -120,10 +120,10 @@ defmodule LogWatcher.Commands do
           {:ok, Command.t()} | {:error, Ecto.Changeset.t()}
   def create_command_from_file(session_id, log_file_path) do
     # Schemaless changesets
-    with create_params <-
+    with {:ok, create_params} <-
            parse_log_file_name(session_id, log_file_path),
          {:ok, command} <-
-           change_create_command(create_params)
+           change_create_command(%Command{}, create_params)
            |> Ecto.Changeset.apply_action(:insert),
          status_params <- read_command_status(command) do
       change_update_command_status(command, status_params)
@@ -159,38 +159,56 @@ defmodule LogWatcher.Commands do
 
   # Private functions
 
+  defp parse_params(log_file_name) do
+    case Regex.named_captures(
+           ~r/^(?<session_id>[^-]+)-(?<gen>\d+)-(?<command_name>[^-]+)-(?<command_id>[^-]+)/,
+           log_file_name
+         ) do
+      nil ->
+        {:error, :invalid_file_name}
+
+      params ->
+        valid_params? =
+          ["session_id", "gen", "command_name", "command_id"]
+          |> Enum.all?(fn key -> params[key] != "" end)
+
+        if valid_params? do
+          {:ok, params}
+        else
+          {:error, :invalid_file_name}
+        end
+    end
+  end
+
   @spec parse_log_file_name(String.t(), String.t()) :: map()
   defp parse_log_file_name(session_id, log_file_path) do
-    log_dir = Path.dirname(log_file_path)
     log_file_name = Path.basename(log_file_path)
-    is_archived = String.ends_with?(log_file_name, ".jsonx")
-    log_prefix = Regex.replace(~r/-log\.json.?$/, log_file_name, "")
 
-    with session_and_archive_params <- %{
+    case parse_params(log_file_name) do
+      {:ok, params} ->
+        params =
+          if params["session_id"] != session_id do
+            _ = Logger.warn("session_id in log file name does not match session")
+            Map.put(params, "session_id", session_id)
+          else
+            params
+          end
+
+        log_dir = Path.dirname(log_file_path)
+        log_prefix = Regex.replace(~r/-log\.json.?$/, log_file_name, "")
+        is_archived = String.ends_with?(log_file_name, ".jsonx")
+
+        {:ok,
+         Map.merge(params, %{
            "log_dir" => log_dir,
            "log_file_name" => log_file_name,
            "log_file_path" => log_file_path,
            "log_prefix" => log_prefix,
            "archived?" => is_archived
-         },
-         file_name_params <-
-           Regex.named_captures(
-             ~r/^(?<session_id>[^-]+)-(?<gen>\d+)-(?<command_name>[^-]+)-(?<command_id>[^-]+)/,
-             log_file_name
-           ) do
-      if !is_map(file_name_params) do
-        raise "Bad log file name #{log_file_name}"
-      end
+         })}
 
-      params =
-        if file_name_params["session_id"] != session_id do
-          _ = Logger.debug("session_id in log file name does not match session")
-          Map.put(file_name_params, "session_id", session_id)
-        else
-          file_name_params
-        end
-
-      Map.merge(params, session_and_archive_params)
+      error ->
+        error
     end
   end
 

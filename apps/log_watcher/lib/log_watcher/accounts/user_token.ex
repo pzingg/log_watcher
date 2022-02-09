@@ -1,4 +1,5 @@
 defmodule LogWatcher.Accounts.UserToken do
+  @moduledoc false
   use Ecto.Schema
 
   import Ecto.Query
@@ -15,6 +16,14 @@ defmodule LogWatcher.Accounts.UserToken do
   @confirm_validity_in_days 7
   @change_email_validity_in_days 7
   @session_validity_in_days 60
+
+  @type t() :: %__MODULE__{
+          token: String.t(),
+          context: String.t(),
+          sent_to: String.t(),
+          user: LogWatcher.Schema.user_assoc(),
+          inserted_at: DateTime.t()
+        }
 
   @primary_key false
   schema "users_tokens" do

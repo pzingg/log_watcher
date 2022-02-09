@@ -363,7 +363,7 @@ if __name__ == '__main__':
   parser.add_argument('-i', '--command-id', help='command id', required=True)
   parser.add_argument('-n', '--command-name', help='command name', choices = ['create', 'update', 'generate', 'analytics'], required=True)
   parser.add_argument('-g', '--gen', help='gen', type=int, required=True)
-  parser.add_argument('-e', '--error', help='phase in which to generate error result')
+  parser.add_argument('-e', '--error', help='phase in which to automatically generate error result')
 
   try:
     args = parser.parse_args()

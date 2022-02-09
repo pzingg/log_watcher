@@ -9,32 +9,6 @@ defmodule LogWatcher.Commands.MockTaskTest do
 
   @script_timeout 30_000
 
-  # %{
-  #  command_args: %{
-  #    cancel: false,
-  #    error: "",
-  #    num_lines: 11,
-  #    script_path: "/home/pzingg/Projects/elixir/log_watcher/_build/test/lib/log_watcher/priv/mock_command/mock_command.R",
-  #    space_type: "factorial"
-  #  },
-  #  command_id: "01FV3N4DBM182F9JN9F3QSY50F",
-  #  command_name: "update",
-  #  session: %LogWatcher.Sessions.Session{
-  #    __meta__: #Ecto.Schema.Metadata<:loaded, "sessions">,
-  #    acked_event_id: nil,
-  #    description: "test 01 runs an Rscript mock command",
-  #    events: #Ecto.Association.NotLoaded<association :events is not loaded>,
-  #    gen: 0,
-  #    id: "01FV3N4DBCBVHAAXNT9VX4J4X3",
-  #    inserted_at: ~U[2022-02-05 00:39:20Z],
-  #    log_dir: "/home/pzingg/Projects/elixir/log_watcher/_build/test/lib/log_watcher/priv/mock_command/sessions/D0es2sKkzDVb0cQP/output",
-  #    name: "test 01 run",
-  #    tag: "D0es2sKkzDVb0cQP",
-  #    updated_at: ~U[2022-02-05 00:39:20Z],
-  #    user: #Ecto.Association.NotLoaded<association :user is not loaded>,
-  #    user_id: "01FV3N4D9R10NFZVRDSSS27QEV"
-  #  }
-  # }
   test "01 runs an Rscript mock command", context do
     %{
       session: session,
@@ -77,7 +51,6 @@ defmodule LogWatcher.Commands.MockTaskTest do
     _ = await_pipeline()
   end
 
-  # TODO: should have errors
   test "03 mock command fails in initializing phase", context do
     %{
       session: session,
@@ -114,6 +87,8 @@ defmodule LogWatcher.Commands.MockTaskTest do
     _ = Commands.archive_session_commands(session)
 
     start_result = CommandManager.start_script(session, command_id, command_name, command_args)
+
+    # nil task_ref returned, it's already gone
     task_ref = assert_script_errors(start_result, command_id, "reading")
     {:ok, _} = await_task(task_ref, @script_timeout)
 
@@ -135,6 +110,8 @@ defmodule LogWatcher.Commands.MockTaskTest do
     _ = Commands.archive_session_commands(session)
 
     start_result = CommandManager.start_script(session, command_id, command_name, command_args)
+
+    # nil task_ref returned, it's already gone
     task_ref = assert_script_errors(start_result, command_id, "started")
     {:ok, _} = await_task(task_ref, @script_timeout)
 
@@ -183,7 +160,6 @@ defmodule LogWatcher.Commands.MockTaskTest do
     _ = await_pipeline()
   end
 
-  # TODO: no function clause matching in LogWatcher.Commands.change_create_command/2
   test "08 finds the running command", context do
     %{
       session: session,
@@ -247,7 +223,7 @@ defmodule LogWatcher.Commands.MockTaskTest do
     } =
       LogWatcher.mock_command_args(to_string(context.test),
         script_file: "mock_command.R",
-        cancel: "created"
+        num_lines: 50
       )
 
     _ = Commands.archive_session_commands(session)
@@ -256,10 +232,10 @@ defmodule LogWatcher.Commands.MockTaskTest do
     # Although the last status we read was "created", by the time the script
     # is interrupted, it might be in the "reading" phase.
 
-    # TODO: should status be "cancelled"???
-    # TODO: Argument '--cancel' is not a defined optional argument or flag
-    task_ref = assert_script_errors(start_result, command_id, ["created", "reading"], "completed")
-    {:ok, _} = await_task(task_ref, @script_timeout)
+    {:ok, %{task_ref: task_ref}} = start_result
+    :ok = CommandManager.cancel(command_id)
+    {:ok, result} = await_task(task_ref, @script_timeout)
+    assert result.status == "cancelled"
 
     _ = await_pipeline()
   end

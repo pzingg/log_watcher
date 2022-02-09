@@ -105,10 +105,11 @@ defmodule LogWatcher.Sessions do
   Creates the session's log.
   """
   def init_session(%Session{log_dir: log_dir} = session) do
-    with :ok <- File.mkdir_p(log_dir) do
-      _ = Logger.info("accessed #{log_dir}")
-      Session.write_event(session, :create_session)
-    else
+    case File.mkdir_p(log_dir) do
+      :ok ->
+        _ = Logger.info("accessed #{log_dir}")
+        Session.write_event(session, :create_session)
+
       {:error, reason} ->
         _ = Logger.error("unable to create #{log_dir}")
         {:error, reason}

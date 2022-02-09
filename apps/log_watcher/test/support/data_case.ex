@@ -97,6 +97,8 @@ defmodule LogWatcher.DataCase do
 
   @spec await_task(reference() | integer(), integer()) ::
           {:ok, term()} | {:error, :timeout}
+  def await_task(nil, _timeout), do: {:ok, :task_completed}
+
   def await_task(task_ref, timeout) when is_reference(task_ref) do
     _ = Logger.debug("await_task task_ref #{inspect(task_ref)}")
     result = CommandManager.await(task_ref, timeout)

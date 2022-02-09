@@ -41,6 +41,7 @@ defmodule LogWatcher.ScriptRunner do
             await_running: false,
             sigint_pending: false,
             task: nil,
+            result: nil,
             client_from: nil,
             other_waiters: []
 
@@ -59,6 +60,7 @@ defmodule LogWatcher.ScriptRunner do
           await_running: boolean(),
           sigint_pending: boolean(),
           task: Task.t() | nil,
+          result: term(),
           client_from: GenServer.from() | nil,
           other_waiters: [{:atom, GenServer.from()}]
         }
@@ -307,37 +309,74 @@ defmodule LogWatcher.ScriptRunner do
   end
 
   def handle_info(
-        {task_ref, result},
-        %__MODULE__{command_id: command_id, task: %Task{ref: task_ref}} = state
-      ) do
-    _ = Logger.debug("ScriptRunner #{command_id} received command result")
+        {result_ref, result},
+        %__MODULE__{command_id: command_id, task: task} = state
+      )
+      when is_reference(result_ref) do
+    message =
+      if !is_nil(task) && result_ref == task.ref do
+        "command result"
+      else
+        "other ref result"
+      end
+
+    _ = Logger.debug("ScriptRunner #{command_id} received #{message}")
 
     state =
-      maybe_send_reply(state, {:error, {:command_result, result}}, log_message: "command result")
+      state
+      |> maybe_send_reply({:error, {:command_result, result}}, log_message: message)
+
+    {:noreply, %__MODULE__{state | result: result}}
+  end
+
+  def handle_info(
+        {:DOWN, down_ref, :process, _pid, reason},
+        %__MODULE__{command_id: command_id, task: task} = state
+      ) do
+    {state, message} =
+      if !is_nil(task) && down_ref == task.ref do
+        {%__MODULE__{state | task: nil}, "task DOWN #{reason}"}
+      else
+        {state, "other ref DOWN #{reason}"}
+      end
+
+    _ = Logger.debug("ScriptRunner #{command_id} received #{message}")
+
+    # Will only send this if :command_result was never sent.
+    state
+    |> maybe_send_reply({:error, {:command_exit, reason}},
+      log_message: message
+    )
+    |> reply_to_all_waiters(:command_exit)
 
     {:noreply, state}
   end
 
+  # Cancel message sends interrupt, we get this.
   def handle_info(
-        {:DOWN, task_ref, :process, _pid, reason},
-        %__MODULE__{command_id: command_id, task: %Task{ref: task_ref}} = state
+        {:EXIT, _port, reason},
+        %__MODULE__{command_id: command_id} = state
       ) do
-    _ = Logger.debug("ScriptRunner #{command_id} received command exit #{reason}")
+    _ = Logger.debug("ScriptRunner #{command_id} received port EXIT #{reason}")
 
     # Will only send this if :command_result was never sent.
     state =
-      %__MODULE__{state | task: nil}
+      state
       |> maybe_send_reply({:error, {:command_exit, reason}},
-        log_message: "command exit #{reason}"
+        log_message: "port EXIT #{reason}"
       )
       |> reply_to_all_waiters(:command_exit)
 
-    {:stop, :normal, state}
+    {:noreply, state}
   end
 
   def handle_info(unexpected, %__MODULE__{command_id: command_id} = state) do
     _ = Logger.debug("ScriptRunner #{command_id} unexpected #{inspect(unexpected)}")
-    state = maybe_send_reply(state, {:error, :unimplemented}, log_message: "unexpected")
+
+    state =
+      maybe_send_reply(state, {:error, :unimplemented},
+        log_message: "unexpected: #{inspect(unexpected)}"
+      )
 
     # Maybe return {:stop, :normal, state}?
     {:noreply, state}
@@ -346,7 +385,7 @@ defmodule LogWatcher.ScriptRunner do
   @doc false
   @impl true
   def terminate(reason, %__MODULE__{command_id: command_id} = state) do
-    _ = Logger.debug("ScriptRunner #{command_id} terminate #{reason}")
+    _ = Logger.error("ScriptRunner #{command_id} terminate #{reason}")
     log_path = get_log_path(state)
     FileWatcherManager.unwatch(log_path, true)
 
@@ -365,10 +404,23 @@ defmodule LogWatcher.ScriptRunner do
     end
   end
 
-  defp reply_to_all_waiters(%__MODULE__{other_waiters: waiters} = state, wait_type) do
-    # If anyone else was waiting...
+  defp reply_to_all_waiters(
+         %__MODULE__{other_waiters: waiters, result: result} = state,
+         wait_type
+       ) do
+    # If anyone else was waiting.
+    # TODO match the original wait_type if it's not :command_exit
+    # Right now we only get called from `await_exit`, so this is OK.
     for {_wait_type, from} <- waiters do
-      GenServer.reply(from, {:ok, wait_type})
+      reply =
+        if wait_type == :command_exit and !is_nil(result) do
+          # result should be a tuple {:ok, ...} or {:error, ...}
+          result
+        else
+          :ok
+        end
+
+      GenServer.reply(from, reply)
     end
 
     %__MODULE__{state | other_waiters: []}
@@ -529,7 +581,7 @@ defmodule LogWatcher.ScriptRunner do
       {output, exit_status} =
         System.cmd(executable, [script_path | shell_args], cd: Path.dirname(script_path))
 
-      _ = Logger.debug("ScriptRunner #{command_id} script exited with #{exit_status}")
+      _ = Logger.error("ScriptRunner #{command_id} script exited with #{exit_status}")
       _ = Logger.debug("ScriptRunner #{command_id} output from script: #{inspect(output)}")
 
       errors =
@@ -592,7 +644,7 @@ defmodule LogWatcher.ScriptRunner do
       if event_type == :command_updated do
         state
         |> maybe_update_os_pid(event)
-        |> maybe_cancel(event)
+        |> maybe_cancel()
       else
         state
       end
@@ -639,27 +691,6 @@ defmodule LogWatcher.ScriptRunner do
     end
   end
 
-  @spec maybe_cancel(state(), map()) :: state()
-  defp maybe_cancel(%__MODULE__{task: nil} = state, _event), do: state
-
-  defp maybe_cancel(
-         %__MODULE__{command_id: command_id, cancel: cancel} = state,
-         %{status: status}
-       ) do
-    if status == cancel do
-      _ =
-        _ =
-        Logger.debug(
-          "ScriptRunner #{command_id}: cancelling script, last status read was #{status}"
-        )
-
-      {reply, state} = do_cancel(%__MODULE__{state | cancel: "sent"})
-      maybe_send_reply(state, reply, log_message: "cancel")
-    else
-      state
-    end
-  end
-
   @spec parse_result(map(), String.t()) :: map()
   defp parse_result(event_data, output) do
     case String.split(output, "\n") |> decode_last_json_line() do
@@ -680,15 +711,24 @@ defmodule LogWatcher.ScriptRunner do
     end)
   end
 
+  @spec maybe_cancel(state()) :: state()
+  defp maybe_cancel(%__MODULE__{os_pid: 0} = state), do: state
+  defp maybe_cancel(%__MODULE__{sigint_pending: false} = state), do: state
+
+  defp maybe_cancel(state) do
+    {_reply, state} = do_cancel(state)
+    state
+  end
+
   @spec do_cancel(state()) :: {:pending | :ok, state()}
   defp do_cancel(%__MODULE__{command_id: command_id, os_pid: os_pid} = state) do
-    if is_nil(os_pid) do
+    if os_pid == 0 do
       _ = Logger.debug("ScriptRunner #{command_id} set sigint_pending")
       {:pending, %__MODULE__{state | sigint_pending: true}}
     else
-      _ = Logger.debug("ScriptRunner #{command_id} sending \"kill -s INT\" to #{os_pid}")
+      _ = Logger.error("ScriptRunner #{command_id} sending \"kill -s INT\" to #{os_pid}")
       _ = System.cmd("kill", ["-s", "INT", to_string(os_pid)])
-      {:ok, %__MODULE__{state | sigint_pending: false, os_pid: 0}}
+      {:ok, %__MODULE__{state | sigint_pending: false}}
     end
   end
 

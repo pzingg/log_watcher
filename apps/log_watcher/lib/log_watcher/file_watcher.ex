@@ -397,21 +397,21 @@ defmodule LogWatcher.FileWatcher do
 
         _ = ScriptRunner.send_event(command_id, :command_updated, event_data)
 
-        # :command_started is only sent after we have validated.
-        # It will cause the ScriptRunner to exit the message loop and return.
-        next_file =
-          if !start_sent && Enum.member?(@command_started_status, event_data.status) do
+        cond do
+          Enum.member?(@command_completed_status, event_data.status) ->
+            # Early completion (error in "reading" phase, e.g.)
+            _ = ScriptRunner.send_event(command_id, :command_result, event_data)
+            %WatchedFile{file | start_sent: true}
+
+          !start_sent && Enum.member?(@command_started_status, event_data.status) ->
+            # :command_started is only sent after we have validated.
+            # It will cause the ScriptRunner to exit the message loop and return.
             _ = ScriptRunner.send_event(command_id, :command_started, event_data)
             %WatchedFile{file | start_sent: true}
-          else
+
+          true ->
             file
-          end
-
-        if Enum.member?(@command_completed_status, event_data.status) do
-          _ = ScriptRunner.send_event(command_id, :command_completed, event_data)
         end
-
-        next_file
 
       _ ->
         _ = Logger.debug("FileWatcher, ignoring non-JSON: #{line}")

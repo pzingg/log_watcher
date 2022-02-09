@@ -10,14 +10,18 @@ defmodule LogWatcher.Sessions.Event do
 
   @typedoc """
   Definition of the Event struct.
-  * :id - Identifier
-  * :command_id - Transaction identifier, if event belongs to a transaction
-  * :version - Version number
-  * :data - Context
-  * :ttl - Time to live value
-  * :source - Who created this event: module, function or service name are good
-  * :initialized_at - When the process initialized to generate this event
-  * :occurred_at - When it is occurred
+  * :id - globally unique identifier
+  * :version - version number
+  * :type - "class" of event (e.g. "command_updated")
+  * :source - who created this event: module, function or service name.
+    we use the command name ("generate", "create", etc.), if event
+    belongs to a command.
+  * :data - event data
+  * :session_id - session identifier
+  * :command_id - command identifier, if event belongs to a command
+  * :ttl - time to live value
+  * :initialized_at - when the process initialized to generate this event
+  * :occurred_at - when the event occurred
   """
   @type t :: %__MODULE__{
           id: integer(),

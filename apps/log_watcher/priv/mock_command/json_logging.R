@@ -61,7 +61,7 @@ jcat <- function(message) {
   } else {
     message_data <- message
   }
-  # cat(to_json_line(message_data))
+  cat(to_json_line(message_data))
 }
 
 to_json_line <- function(data, append_newline = TRUE) {
@@ -259,39 +259,44 @@ log_error <- function(cond, args) {
   message <- trimws(trace$error)
 
   if (is.null(args)) {
+    set_script_status("initializing")
     result_file <- NULL
+    result_info <- list(
+      succeeded = FALSE,
+      errors = make_error_list(message)
+    )
+    status <- "completed"
   } else {
     result_file <- result_file_name(args$session_id, args$gen, args$command_id, args$command_name)
+    result_info <- list(
+      succeeded = FALSE,
+      file = result_file,
+      errors = make_error_list(message)
+    )
+    status <- ifelse(identical(trace$error_type, "interrupt"), "cancelled", "completed")
   }
+  set_script_status(status)
 
-  result_info <- list(
-    succeeded = FALSE,
-    file = result_file,
-    errors = make_error_list(message)
-  )
-
-  status <- ifelse(identical(trace$error_type, "interrupt"), "cancelled", "completed")
-  info <- list(
+  res <- list(
     message = message,
     status = status,
     result = result_info,
     call = trace$call,
-    traceback = trace$traceback
+    traceback = trace$traceback[-1:-3],
+    completed_at = format_utcnow()
   )
 
-  if (is.null(result_file)) {
-    # Error occurred before args were correctly parsed.
-    jcat(info)
-  } else {
-    set_script_status(status)
-    write_result_file(result_file, info, NULL)
-    res <- list(
-      completed_at = format_utcnow(),
-      result = result_info
-    )
-    log_res(message, res, level = "ERROR")
+  if (!is.null(result_file)) {
+    write_result_file(result_file, res, NULL)
   }
-  message
+
+  if (!is.null(args)) {
+    log_res(message, res, level = "ERROR")
+  } else {
+    # Error occurred before args were correctly parsed.
+    jcat(res)
+  }
+  res
 }
 
 read_arg_file <- function(arg_path) {
@@ -307,31 +312,25 @@ read_arg_file <- function(arg_path) {
 do_read_arg_file <- function(arg_path) {
   set_script_status("reading")
 
-  args <- jsonlite::read_json(arg_path, simplifyVector = TRUE)
-  command_id <- args$command_id
+  if (file.exists(arg_path)) {
+    args <- jsonlite::read_json(arg_path, simplifyVector = TRUE)
+  } else {
+    args <- list()
+  }
 
-  opt_session_id <- getOption("daptics_session_id")
-  stopifnot(!is.null(args$session_id))
-  stopifnot(identical(args$session_id, opt_session_id))
-  opt_command_id <- getOption("daptics_command_id")
-  stopifnot(!is.null(command_id))
-  stopifnot(identical(command_id, opt_command_id))
-  opt_command_name <- getOption("daptics_command_name")
-  stopifnot(!is.null(args$command_name))
-  stopifnot(identical(args$command_name, opt_command_name))
-  opt_gen <- getOption("daptics_command_gen")
-  stopifnot(!is.null(args$gen))
-  stopifnot(identical(args$gen, opt_gen))
+  # Override args in file with globals
+  args$session_id <- getOption("daptics_session_id")
+  args$command_id <- getOption("daptics_command_id")
+  args$command_name <- getOption("daptics_command_name")
+  args$gen <- getOption("daptics_command_gen")
 
-  args["session_id"] <- NULL
-  args["log_dir"] <- NULL
-  args["command_id"] <- NULL
-  args["command_name"] <- NULL
-  args["gen"] <- NULL
+  # Defaults
+  if (is.null(args$num_lines)) args$num_lines <- 10
+  if (is.null(args$space_type)) args$space_type <- "mixture"
 
   list(
     status = "reading",
-    message = paste0("Command ", command_id, " parsed ", length(args), " args"),
+    message = paste0("Command ", args$command_id, " parsed ", length(args), " args"),
     args = args
   )
 }

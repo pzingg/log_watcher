@@ -1,5 +1,6 @@
 #!/usr/bin/Rscript
 
+library(tools, quietly = TRUE)
 source("json_logging.R")
 source("script_startup.R")
 
@@ -29,7 +30,9 @@ run_command <- function(args) {
   command_name <- args$command_name
   gen <- args$gen
 
-  error <- ifelse(is.null(args$error), "none", args$error)
+  # Test for "" or NULL or FALSE
+  error <- ifelse(is.empty(args$error), "none", args$error)
+
   started_at <- NULL
   running_at <- NULL
   write_start <- FALSE
@@ -221,16 +224,26 @@ mock_status <- function(command_id, line_no, num_lines, error) {
 
 # Execution starts here
 
+panic <- FALSE
 args <- try_capture_stack(start_script())
 if (inherits(args, "condition")) {
   # If there is an error, class(args) <- c("simpleError", "error", "condition")
-  log_error(args, NULL)
+  panic <- TRUE
+  res <- log_error(args, NULL)
 } else {
   res <- try_capture_stack(run_command(args))
   # If there is an error, class(res) <- c("simpleError", "error", "condition")
   if (inherits(res, "condition")) {
-    log_error(res, args)
+    panic <- TRUE
+    res <- log_error(res, args)
   } else {
     res
   }
 }
+
+res <- to_json_line(res, append_newline = FALSE)
+if (panic) {
+  con <- file("panic.json", open = "at")
+  writeLines(res, con=con)
+}
+cat(res)
